@@ -9,6 +9,8 @@ import windaq as wdq
 from scipy.signal import filtfilt, butter
 from tkinter import Tk, filedialog
 from collections import defaultdict
+from openpyxl import load_workbook
+from openpyxl.drawing.image import Image
 
 # Helper Functions
 def select_folder_and_find_files(extension=".WDH"):
@@ -150,7 +152,7 @@ def plot_speed_vs_torque(sweep_data, output_path):
     plt.close()
     print(f"Combined Speed vs Torque plot saved to: {output_path}")
 
-def plot_speed_vs_torque_multiple_tests(data_files, output_path):
+def plot_speed_vs_torque_multiple_tests(data_files, output_path, max_speed_view=2000):
     """
     Plots speed vs filtered torque for multiple tests on the same plot.
     Speeds are assumed to have proper directionality (positive for CW, negative for CCW).
@@ -164,7 +166,7 @@ def plot_speed_vs_torque_multiple_tests(data_files, output_path):
     for test_name, df in data_files.items():
         plt.plot(df['speed, rpm'], df['torque, Nm (filtered)'], label=test_name)
 
-    plt.xlim(-2000, 2000)
+    plt.xlim(-max_speed_view, max_speed_view)
     plt.title("Speed vs Filtered Torque for All Tests")
     plt.xlabel("Speed (RPM)")
     plt.ylabel("Filtered Torque (Nm)")
@@ -237,7 +239,7 @@ def lowpass_filter(data, sampling_rate, cutoff_freq, order=4):
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, data)
 
-def save_torque_averages_to_excel(all_torque_averages, file_path):
+def save_torque_averages_to_excel_old(all_torque_averages, file_path):
     """
     Saves torque averages from all tests to an Excel file.
 
@@ -255,6 +257,57 @@ def save_torque_averages_to_excel(all_torque_averages, file_path):
     df.to_excel(file_path, index=False, engine="xlsxwriter")
     print(f"Torque averages saved to Excel file: {file_path}")
 
+def save_torque_averages_to_excel(all_torque_averages, file_path):
+    """
+    Saves torque averages from all tests to an Excel file and plots the data.
+
+    Parameters:
+    - all_torque_averages: Dictionary of test names with torque averages for steps.
+    - output_path: Path to save the Excel file.
+    """
+    # Convert the nested dictionary into a structured DataFrame
+    rows = []
+    for test_name, step_averages in all_torque_averages.items():
+        for step_name, avg_torque in step_averages.items():
+            rows.append({"Test Name": test_name, "Step Name": step_name, "Avg Torque (Nm)": avg_torque})
+    
+    df = pd.DataFrame(rows)
+    df.to_excel(file_path, index=False, engine="xlsxwriter")
+    print(f"Torque averages saved to Excel file: {file_path}")
+
+    # Plot the torque averages using matplotlib
+    plt.figure(figsize=(12, 8))
+    step_names = df['Step Name'].unique()
+    test_names = df['Test Name'].unique()
+    bar_width = 0.8 / len(test_names)
+    index = np.arange(len(step_names))
+
+    for i, test_name in enumerate(test_names):
+        subset = df[df['Test Name'] == test_name]
+        plt.bar(index + i * bar_width, subset['Avg Torque (Nm)'].abs(), bar_width, label=test_name)
+
+    plt.xlabel('Step Name')
+    plt.ylabel('Avg Torque (Nm)')
+    plt.title('Torque Averages')
+    plt.xticks(index + bar_width * (len(test_names) - 1) / 2, step_names)
+    plt.legend(title='Test Name')
+
+    # Add major gridlines
+    plt.grid(which='major', linestyle='-', linewidth='0.5', color='grey')
+
+    plot_path = file_path.replace('.xlsx', '.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Torque averages plot saved to: {plot_path}")
+
+    # Insert the plot into the Excel sheet
+    workbook = load_workbook(file_path)
+    sheet = workbook.active
+    img = Image(plot_path)
+    sheet.add_image(img, 'E1')  # Adjust the cell location as needed
+    workbook.save(file_path)
+    print(f"Plot inserted into Excel file: {file_path}")
+
 # Main Script
 if __name__ == "__main__":
     # Debug mode
@@ -264,6 +317,8 @@ if __name__ == "__main__":
 
     # Define test steps for torque analysis
     torque_steps = [
+        ## the following start times and durations chop off the transition of speeds 
+        # to ensure data is clean and free of noise
         {"name": "Pre Break-in Torque", "direction": "CW", "start_time": 1, "duration": 19},
         {"name": "Pre CW sweep", "direction": "CW", "start_time": 334, "duration": 19},
         {"name": "Post CW sweep", "direction": "CW", "start_time": 479, "duration": 19},
