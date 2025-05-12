@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import windaq as wdq
 
-from scipy.signal import filtfilt, butter
+from scipy.signal import filtfilt, butter, find_peaks
 from tkinter import Tk, filedialog
 from collections import defaultdict
 from openpyxl import load_workbook
@@ -223,10 +223,19 @@ def analyze_fft(df, column, sampling_rate, start_time=None, stop_time=None, sort
     fft_magnitude = np.abs(fft_result)[:len(data) // 2]
     fft_freqs = np.fft.fftfreq(len(data), d=1/sampling_rate)[:len(data) // 2]
 
-    if sort_by_magnitude:
-        sorted_indices = np.argsort(fft_magnitude)[::-1]
-        fft_freqs = fft_freqs[sorted_indices]
-        fft_magnitude = fft_magnitude[sorted_indices]
+    # Find peaks in the FFT magnitude data
+    peaks, _ = find_peaks(fft_magnitude, height=1)  # Adjust height parameter as needed
+
+    # Sort peaks by magnitude
+    peak_magnitudes = fft_magnitude[peaks]
+    sorted_indices = np.argsort(peak_magnitudes)[::-1]  # Sort indices by magnitude descending
+    sorted_peaks = peaks[sorted_indices]
+
+    # Print the frequencies and magnitudes of the identified peaks
+    print("Identified peaks (sorted by magnitude):")
+    for peak in sorted_peaks:
+        if 34 < fft_freqs[peak] < 37:  # Only consider frequencies above 5 Hz
+            print(f"Frequency: {fft_freqs[peak]:.2f} Hz, Magnitude: {fft_magnitude[peak]:.2f}")
 
     return fft_freqs, fft_magnitude
 
@@ -238,6 +247,20 @@ def lowpass_filter(data, sampling_rate, cutoff_freq, order=4):
     normal_cutoff = cutoff_freq / nyquist
     b, a = butter(order, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, data)
+
+def plot_fft(df, column, sampling_rate, test_name, start_time=None, stop_time=None, sort_by_magnitude=False):
+    """
+    Plots the FFT of a specified column of the dataframe within a given time range.
+    """
+    fft_freqs, fft_magnitude = analyze_fft(df, column, sampling_rate, start_time, stop_time, sort_by_magnitude)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(fft_freqs, fft_magnitude)
+    plt.title(f"{test_name} - FFT of {column}")
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Magnitude")
+    plt.grid(True)
+    plt.show()
 
 def save_torque_averages_to_excel_old(all_torque_averages, file_path):
     """
@@ -314,16 +337,17 @@ if __name__ == "__main__":
     plot_all_runs = True
     plot_torque_steps = False
     csv_instead_of_xlsx = False
+    plot_fft_only = False
 
     # Define test steps for torque analysis
     torque_steps = [
         ## the following start times and durations chop off the transition of speeds 
         # to ensure data is clean and free of noise
-        {"name": "Pre Break-in Torque", "direction": "CW", "start_time": 1, "duration": 19},
-        {"name": "Pre CW sweep", "direction": "CW", "start_time": 334, "duration": 19},
-        {"name": "Post CW sweep", "direction": "CW", "start_time": 479, "duration": 19},
-        {"name": "Pre CCW sweep", "direction": "CCW", "start_time": 501, "duration": 19},
-        {"name": "Post CCW sweep", "direction": "CCW", "start_time": 647, "duration": 19},
+        {"name": "Pre Break-in Torque", "direction": "CW", "start_time": 2, "duration": 18},
+        {"name": "Pre CW sweep", "direction": "CW", "start_time": 330, "duration": 18},
+        {"name": "Post CW sweep", "direction": "CW", "start_time": 480, "duration": 18},
+        {"name": "Pre CCW sweep", "direction": "CCW", "start_time": 504, "duration": 18},
+        {"name": "Post CCW sweep", "direction": "CCW", "start_time": 654, "duration": 18},
     ]
 
     # Define test steps for speed sweeps
@@ -352,6 +376,13 @@ if __name__ == "__main__":
         
         # Load the data
         df = wdh_to_df(file_path)
+
+        if plot_fft_only:
+            sampling_rate = 100
+            start_time = 0
+            stop_time = 125 + start_time
+            plot_fft(df, 'torque, Nm', sampling_rate, test_name, start_time, stop_time)
+            continue
 
         # Apply Low-Pass Filter
         df['torque, Nm (filtered)'] = lowpass_filter(
@@ -407,6 +438,8 @@ if __name__ == "__main__":
             df.to_excel(rawdata_path, index=False)
         print(f"Raw data saved to: {rawdata_path}")
 
+    if plot_fft_only:
+        exit()
 
     # Group files by their immediate folder
     grouped_files = defaultdict(list)
