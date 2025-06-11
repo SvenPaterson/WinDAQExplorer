@@ -98,7 +98,7 @@ def plot_filter_torque_stand_data(df, test_name, start_time=0, duration=0):
 
     # Plot Speed
     ax1.plot(df_plot['time, s'], df_plot['speed, rpm'], label='Speed', color="red")
-    ax1.set_ylim(0, 2000)
+    ax1.set_ylim(0, 3000)
     ax1.set_ylabel("Speed, rpm", color="red")
     ax1.grid(which='major', linestyle='-', linewidth=0.75, alpha=0.7)
     ax1.grid(which='minor', linestyle='--', linewidth=0.5, alpha=0.5)
@@ -493,5 +493,5 @@ if __name__ == "__main__":
 
         # Save the combined plot in the current folder
         combined_plot_path = os.path.join(folder_path, f"{folder_name}_speedVStorque.png")
-        plot_speed_vs_torque_multiple_tests(combined_sweeps, combined_plot_path)
+        plot_speed_vs_torque_multiple_tests(combined_sweeps, combined_plot_path, 3000)
         print(f"Combined Speed vs Torque plot saved to: {combined_plot_path}")
