@@ -43,6 +43,10 @@ class ModernWDQAnalyzer:
         self.sample_rate = tk.StringVar(value="100.0")
         self.normalize_method = tk.StringVar(value="minmax")
         
+        # Channel selection for processing
+        self.channel_vars = {}  # Will hold checkboxes for each channel
+        self.checkbox_frame = None
+        
         # Status labels for updates
         self.process_info = None
         self.status_label = None
@@ -55,7 +59,8 @@ class ModernWDQAnalyzer:
             file_loaded=self._on_file_loaded,
             processing_applied=self._on_processing_applied,
             data_reset=self._on_data_reset,
-            error=self._on_error
+            error=self._on_error,
+            plot_update=self._on_plot_update
         )
     
     def _configure_styling(self):
@@ -209,8 +214,8 @@ class ModernWDQAnalyzer:
         table_frame = ttk.Frame(config_frame)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Treeview with scrollbar
-        columns = ('Ch#', 'Name', 'Units', 'Axis')
+        # Treeview with scrollbar - now includes Processing column
+        columns = ('Ch#', 'Name', 'Units', 'Axis', 'Processing')
         tree_container = ttk.Frame(table_frame)
         tree_container.pack(fill=tk.BOTH, expand=True)
         
@@ -218,7 +223,7 @@ class ModernWDQAnalyzer:
                                         show='headings', height=8)
         
         # Configure columns with better widths
-        col_widths = {'Ch#': 40, 'Name': 120, 'Units': 60, 'Axis': 80}
+        col_widths = {'Ch#': 40, 'Name': 100, 'Units': 60, 'Axis': 70, 'Processing': 100}
         for col in columns:
             self.channel_tree.heading(col, text=col)
             self.channel_tree.column(col, width=col_widths[col], minwidth=30)
@@ -250,10 +255,6 @@ class ModernWDQAnalyzer:
                   command=lambda: self._set_axis_selection('Secondary')).pack(side=tk.LEFT, padx=5)
         ttk.Button(axis_btn_frame, text="Hide", 
                   command=lambda: self._set_axis_selection('Omit')).pack(side=tk.LEFT, padx=5)
-        
-        # Update plot button
-        ttk.Button(button_frame, text="🔄 Update Plot", 
-                  command=self._update_plot).pack(fill=tk.X)
     
     def _create_processing_tab(self, notebook):
         """Create improved processing tab."""
@@ -273,23 +274,26 @@ class ModernWDQAnalyzer:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
+        # Channel selection frame
+        self._create_channel_selection_frame(scrollable_frame)
+        
         # Moving Average section
         self._create_processing_section(scrollable_frame, "Moving Average", [
             ("Window Size:", self.ma_window, "samples"),
-            ("Apply", None, lambda: self._apply_moving_average())
+            ("Apply to Selected", None, lambda: self._apply_moving_average())
         ])
         
         # Resampling section
         self._create_processing_section(scrollable_frame, "Resampling", [
             ("Factor:", self.resample_factor, ""),
-            ("Apply", None, lambda: self._apply_resampling())
+            ("Apply to Selected", None, lambda: self._apply_resampling())
         ])
         
         # Low Pass Filter section
         self._create_processing_section(scrollable_frame, "Low Pass Filter", [
             ("Cutoff Freq:", self.cutoff_freq, "Hz"),
             ("Sample Rate:", self.sample_rate, "Hz"),
-            ("Apply", None, lambda: self._apply_lowpass_filter())
+            ("Apply to Selected", None, lambda: self._apply_lowpass_filter())
         ])
         
         # Normalization section
@@ -304,23 +308,21 @@ class ModernWDQAnalyzer:
                                    values=['minmax', 'zscore'], state='readonly', width=10)
         method_combo.pack(side=tk.LEFT, padx=(5, 0))
         
-        ttk.Button(norm_section, text="Apply Normalization", 
+        ttk.Button(norm_section, text="Apply to Selected", 
                   command=self._apply_normalization).pack(fill=tk.X, pady=2)
         
         # Offset removal section
         offset_section = ttk.LabelFrame(scrollable_frame, text="DC Offset", padding=10)
         offset_section.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Button(offset_section, text="Remove DC Offset", 
+        ttk.Button(offset_section, text="Remove from Selected", 
                   command=self._apply_offset_removal).pack(fill=tk.X, pady=2)
         
-        # Action buttons
+        # Action buttons (remove replot button)
         action_frame = ttk.LabelFrame(scrollable_frame, text="Actions", padding=10)
         action_frame.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Button(action_frame, text="🔄 Reset to Original", 
                   command=self._reset_data).pack(fill=tk.X, pady=2)
-        ttk.Button(action_frame, text="📊 Replot Data", 
-                  command=self._update_plot).pack(fill=tk.X, pady=2)
         ttk.Button(action_frame, text="💾 Export CSV", 
                   command=self._export_data).pack(fill=tk.X, pady=2)
         
@@ -337,6 +339,72 @@ class ModernWDQAnalyzer:
         # Pack canvas and scrollbar
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
+    def _create_channel_selection_frame(self, parent):
+        """Create channel selection checkboxes for processing."""
+        selection_frame = ttk.LabelFrame(parent, text="Select Channels for Processing", padding=10)
+        selection_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Instructions
+        ttk.Label(selection_frame, text="Select which channels to apply processing to:", 
+                 style='Status.TLabel').pack(anchor=tk.W, pady=(0, 5))
+        
+        # Container for checkboxes
+        self.checkbox_frame = ttk.Frame(selection_frame)
+        self.checkbox_frame.pack(fill=tk.X)
+        
+        # Note: Checkboxes will be populated when file is loaded
+        self.no_channels_label = ttk.Label(self.checkbox_frame, text="No file loaded", 
+                                          style='Status.TLabel')
+        self.no_channels_label.pack(anchor=tk.W)
+    
+    def _update_channel_checkboxes(self):
+        """Update the channel selection checkboxes."""
+        # Clear existing checkboxes
+        for widget in self.checkbox_frame.winfo_children():
+            widget.destroy()
+        
+        self.channel_vars = {}
+        
+        if not self.controller.is_file_loaded():
+            ttk.Label(self.checkbox_frame, text="No file loaded", 
+                     style='Status.TLabel').pack(anchor=tk.W)
+            return
+        
+        # Create checkboxes for each channel
+        channel_data = self.controller.get_channel_data()
+        
+        for i, (channel_num, name, units, axis) in enumerate(channel_data):
+            self.channel_vars[channel_num] = tk.BooleanVar()
+            
+            checkbox = ttk.Checkbutton(
+                self.checkbox_frame, 
+                text=f"Ch{channel_num}: {name}",
+                variable=self.channel_vars[channel_num]
+            )
+            
+            # Arrange in rows of 2
+            row = i // 2
+            col = i % 2
+            checkbox.grid(row=row, column=col, sticky=tk.W, padx=(0, 20), pady=2)
+        
+        # Clear all button
+        clear_btn = ttk.Button(self.checkbox_frame, text="Clear All", 
+                              command=self._clear_channel_selection)
+        clear_btn.grid(row=(len(channel_data) + 1) // 2, column=0, sticky=tk.W, pady=(10, 0))
+    
+    def _clear_channel_selection(self):
+        """Clear all channel selections."""
+        for var in self.channel_vars.values():
+            var.set(False)
+    
+    def _get_selected_channels(self) -> List[int]:
+        """Get list of currently selected channels."""
+        selected = []
+        for channel, var in self.channel_vars.items():
+            if var.get():
+                selected.append(channel)
+        return selected
     
     def _create_statistics_tab(self, notebook):
         """Create statistics display tab."""
@@ -395,14 +463,12 @@ class ModernWDQAnalyzer:
         ttk.Label(plot_header, text="Data Visualization", 
                  style='Subheader.TLabel').pack(side=tk.LEFT)
         
-        # Plot controls on the right
+        # Plot controls on the right (remove refresh since it's automatic)
         controls_frame = ttk.Frame(plot_header)
         controls_frame.pack(side=tk.RIGHT)
         
         ttk.Button(controls_frame, text="💾 Save", 
                   command=self._save_plot).pack(side=tk.LEFT, padx=2)
-        ttk.Button(controls_frame, text="🔄 Refresh", 
-                  command=self._update_plot).pack(side=tk.LEFT, padx=2)
         
         # Plot area
         plot_container = ttk.Frame(self.right_panel)
@@ -448,14 +514,13 @@ class ModernWDQAnalyzer:
             values[3] = axis_type
             self.channel_tree.item(item, values=values)
             
-            # Update controller
+            # Update controller - this will automatically trigger plot update
             self.controller.update_channel_axis(channel_num, axis_type)
     
     def _update_plot(self):
         """Update the plot with current data."""
         if not self.controller.is_file_loaded():
-            messagebox.showwarning("Warning", "Please load a file first")
-            return
+            return  # Don't show warning, just silently return
         
         self._update_status("Updating plot...")
         time_data, processed_data, channel_configs = self.controller.get_plot_data()
@@ -464,41 +529,56 @@ class ModernWDQAnalyzer:
             time_data, processed_data, channel_configs, 
             self.controller.get_file_info()['filename']
         )
-        self._update_status("Plot updated")
+        self._update_status("Ready")
     
     def _apply_moving_average(self):
-        """Apply moving average through controller."""
+        """Apply moving average to selected channels."""
         try:
             window = int(self.ma_window.get())
-            self.controller.apply_moving_average(window)
+            selected_channels = self._get_selected_channels()
+            success = self.controller.apply_moving_average(window, selected_channels)
+            if success:
+                self._clear_channel_selection()  # Clear selection after apply
         except ValueError:
             messagebox.showerror("Error", "Invalid window size")
     
     def _apply_resampling(self):
-        """Apply resampling through controller."""
+        """Apply resampling to selected channels."""
         try:
             factor = int(self.resample_factor.get())
-            self.controller.apply_resampling(factor)
+            selected_channels = self._get_selected_channels()
+            success = self.controller.apply_resampling(factor, selected_channels)
+            if success:
+                self._clear_channel_selection()  # Clear selection after apply
         except ValueError:
             messagebox.showerror("Error", "Invalid resample factor")
     
     def _apply_lowpass_filter(self):
-        """Apply low pass filter through controller."""
+        """Apply low pass filter to selected channels."""
         try:
             cutoff = float(self.cutoff_freq.get())
             sample_rate = float(self.sample_rate.get())
-            self.controller.apply_lowpass_filter(cutoff, sample_rate)
+            selected_channels = self._get_selected_channels()
+            success = self.controller.apply_lowpass_filter(cutoff, sample_rate, selected_channels)
+            if success:
+                self._clear_channel_selection()  # Clear selection after apply
         except ValueError:
             messagebox.showerror("Error", "Invalid filter parameters")
     
     def _apply_normalization(self):
-        """Apply normalization through controller."""
+        """Apply normalization to selected channels."""
         method = self.normalize_method.get()
-        self.controller.apply_normalization(method)
+        selected_channels = self._get_selected_channels()
+        success = self.controller.apply_normalization(method, selected_channels)
+        if success:
+            self._clear_channel_selection()  # Clear selection after apply
     
     def _apply_offset_removal(self):
-        """Apply offset removal through controller."""
-        self.controller.apply_offset_removal()
+        """Apply offset removal to selected channels."""
+        selected_channels = self._get_selected_channels()
+        success = self.controller.apply_offset_removal(selected_channels)
+        if success:
+            self._clear_channel_selection()  # Clear selection after apply
     
     def _reset_data(self):
         """Reset data through controller."""
@@ -571,24 +651,27 @@ class ModernWDQAnalyzer:
         self.root.update_idletasks()
     
     def _populate_channel_table(self):
-        """Populate channel configuration table."""
+        """Populate channel configuration table with processing info."""
         # Clear existing items
         for item in self.channel_tree.get_children():
             self.channel_tree.delete(item)
         
         # Get channel data from controller
         channel_data = self.controller.get_channel_data()
+        processing_info = self.controller.get_channel_processing_info()
         
-        # Add channels
+        # Add channels with processing info
         for channel_num, name, units, axis in channel_data:
+            processing = processing_info.get(channel_num, "None")
             self.channel_tree.insert('', 'end', 
-                                   values=(channel_num, name, units, axis))
+                                   values=(channel_num, name, units, axis, processing))
     
     # Controller Callback Handlers
     def _on_file_loaded(self, file_info: Dict):
         """Called when controller loads a file."""
         self._update_file_info_display()
         self._populate_channel_table()
+        self._update_channel_checkboxes()  # Update checkboxes when file loads
         self._update_statistics()
     
     def _on_processing_applied(self, message: str, success: bool = True):
@@ -598,9 +681,11 @@ class ModernWDQAnalyzer:
             self.process_info.config(text=message, style=style)
         
         self._update_statistics()  # Update stats after processing
+        self._populate_channel_table()  # Update processing info in table
         
-        if success:
-            messagebox.showinfo("Success", message)
+        # Don't show success message box since plot updates automatically provide feedback
+        if not success:
+            messagebox.showerror("Error", message)
     
     def _on_data_reset(self, message: str):
         """Called when controller resets data."""
@@ -608,7 +693,12 @@ class ModernWDQAnalyzer:
             self.process_info.config(text=message, style='Success.TLabel')
         
         self._update_statistics()
-        messagebox.showinfo("Success", message)
+        self._populate_channel_table()  # Update processing info in table
+        # Don't show message box since plot update provides visual feedback
+    
+    def _on_plot_update(self):
+        """Called when controller wants to update the plot."""
+        self._update_plot()
     
     def _on_error(self, error_message: str):
         """Called when controller encounters an error."""

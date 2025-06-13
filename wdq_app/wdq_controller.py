@@ -27,20 +27,23 @@ class WDQController:
         
         # Processing state
         self.processing_history: List[str] = []
+        self.channel_processing_state: Dict[int, Dict[str, any]] = {}  # Track what's applied to each channel
         
         # Callbacks for UI updates
         self.on_file_loaded = None
         self.on_processing_applied = None
         self.on_data_reset = None
         self.on_error = None
+        self.on_plot_update = None
     
     def set_callbacks(self, file_loaded=None, processing_applied=None, 
-                     data_reset=None, error=None):
+                     data_reset=None, error=None, plot_update=None):
         """Set callback functions for UI updates."""
         self.on_file_loaded = file_loaded
         self.on_processing_applied = processing_applied
         self.on_data_reset = data_reset
         self.on_error = error
+        self.on_plot_update = plot_update
     
     def load_file(self, filepath: str) -> bool:
         """
@@ -58,6 +61,10 @@ class WDQController:
             
             if self.on_file_loaded:
                 self.on_file_loaded(self.get_file_info())
+            
+            # Trigger initial plot update
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -86,6 +93,9 @@ class WDQController:
             
             # Create channel configuration
             self.channel_configs[channel] = self._create_channel_config(channel)
+            
+            # Initialize processing state for channel
+            self.channel_processing_state[channel] = {}
     
     def _create_channel_config(self, channel: int) -> ChannelConfig:
         """Create configuration for a channel with cleaned units."""
@@ -141,27 +151,52 @@ class WDQController:
         """Update the axis assignment for a channel."""
         if channel in self.channel_configs:
             self.channel_configs[channel].axis = axis
+            
+            # Trigger plot update when axis changes
+            if self.on_plot_update:
+                self.on_plot_update()
     
     def get_plot_data(self) -> Tuple[np.ndarray, Dict[int, List[float]], Dict[int, ChannelConfig]]:
         """Get data for plotting."""
         return self.time_data, self.processed_data, self.channel_configs
     
-    def apply_moving_average(self, window_size: int) -> bool:
-        """Apply moving average to all channels."""
+    def apply_moving_average(self, window_size: int, selected_channels: List[int]) -> bool:
+        """Apply moving average to selected channels only."""
         if not self._validate_loaded():
             return False
         
+        if not selected_channels:
+            if self.on_error:
+                self.on_error("Please select at least one channel")
+            return False
+        
         try:
-            for channel in self.processed_data:
-                processed = DataProcessor.apply_moving_average(
-                    self.processed_data[channel], window_size)
-                self.processed_data[channel] = processed.tolist()
+            for channel in selected_channels:
+                if channel in self.processed_data:
+                    # Reset to original data for this channel first
+                    self.processed_data[channel] = self.original_data[channel].copy()
+                    
+                    # Apply moving average
+                    processed = DataProcessor.apply_moving_average(
+                        self.processed_data[channel], window_size)
+                    self.processed_data[channel] = processed.tolist()
+                    
+                    # Update processing state
+                    self.channel_processing_state[channel] = {
+                        'type': 'moving_average',
+                        'window_size': window_size
+                    }
             
-            message = f"Applied moving average (window={window_size})"
+            channel_names = [f"Ch{ch}" for ch in selected_channels]
+            message = f"Applied moving average (window={window_size}) to {', '.join(channel_names)}"
             self._update_processing_info(message)
             
             if self.on_processing_applied:
                 self.on_processing_applied(message, success=True)
+            
+            # Trigger plot update after processing
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -171,26 +206,47 @@ class WDQController:
                 self.on_error(error_msg)
             return False
     
-    def apply_resampling(self, factor: int) -> bool:
-        """Apply resampling to data."""
+    def apply_resampling(self, factor: int, selected_channels: List[int]) -> bool:
+        """Apply resampling to selected channels only."""
         if not self._validate_loaded():
             return False
         
+        if not selected_channels:
+            if self.on_error:
+                self.on_error("Please select at least one channel")
+            return False
+        
         try:
-            # Resample time data
-            self.time_data = DataProcessor.resample_data(self.time_data, factor)
+            for channel in selected_channels:
+                if channel in self.processed_data:
+                    # Reset to original data for this channel first
+                    self.processed_data[channel] = self.original_data[channel].copy()
+                    
+                    # Apply resampling
+                    resampled = DataProcessor.resample_data(
+                        self.processed_data[channel], factor)
+                    self.processed_data[channel] = resampled.tolist()
+                    
+                    # Update processing state
+                    self.channel_processing_state[channel] = {
+                        'type': 'resampling',
+                        'factor': factor
+                    }
             
-            # Resample channel data
-            for channel in self.processed_data:
-                resampled = DataProcessor.resample_data(
-                    self.processed_data[channel], factor)
-                self.processed_data[channel] = resampled.tolist()
+            # Note: Time data resampling affects all channels, so we update it once
+            if selected_channels:
+                self.time_data = DataProcessor.resample_data(self.wfile.time(), factor)
             
-            message = f"Resampled by factor {factor}"
+            channel_names = [f"Ch{ch}" for ch in selected_channels]
+            message = f"Resampled by factor {factor} for {', '.join(channel_names)}"
             self._update_processing_info(message)
             
             if self.on_processing_applied:
                 self.on_processing_applied(message, success=True)
+            
+            # Trigger plot update after processing
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -200,22 +256,44 @@ class WDQController:
                 self.on_error(error_msg)
             return False
     
-    def apply_lowpass_filter(self, cutoff_freq: float, sample_rate: float) -> bool:
-        """Apply low pass filter to all channels."""
+    def apply_lowpass_filter(self, cutoff_freq: float, sample_rate: float, selected_channels: List[int]) -> bool:
+        """Apply low pass filter to selected channels only."""
         if not self._validate_loaded():
             return False
         
+        if not selected_channels:
+            if self.on_error:
+                self.on_error("Please select at least one channel")
+            return False
+        
         try:
-            for channel in self.processed_data:
-                filtered = DataProcessor.apply_low_pass_filter(
-                    self.processed_data[channel], cutoff_freq, sample_rate)
-                self.processed_data[channel] = filtered.tolist()
+            for channel in selected_channels:
+                if channel in self.processed_data:
+                    # Reset to original data for this channel first
+                    self.processed_data[channel] = self.original_data[channel].copy()
+                    
+                    # Apply filter
+                    filtered = DataProcessor.apply_low_pass_filter(
+                        self.processed_data[channel], cutoff_freq, sample_rate)
+                    self.processed_data[channel] = filtered.tolist()
+                    
+                    # Update processing state
+                    self.channel_processing_state[channel] = {
+                        'type': 'lowpass_filter',
+                        'cutoff_freq': cutoff_freq,
+                        'sample_rate': sample_rate
+                    }
             
-            message = f"Applied low-pass filter (cutoff={cutoff_freq}Hz)"
+            channel_names = [f"Ch{ch}" for ch in selected_channels]
+            message = f"Applied low-pass filter (cutoff={cutoff_freq}Hz) to {', '.join(channel_names)}"
             self._update_processing_info(message)
             
             if self.on_processing_applied:
                 self.on_processing_applied(message, success=True)
+            
+            # Trigger plot update after processing
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -225,21 +303,41 @@ class WDQController:
                 self.on_error(error_msg)
             return False
     
-    def apply_offset_removal(self) -> bool:
-        """Remove DC offset from all channels."""
+    def apply_offset_removal(self, selected_channels: List[int]) -> bool:
+        """Remove DC offset from selected channels only."""
         if not self._validate_loaded():
             return False
         
+        if not selected_channels:
+            if self.on_error:
+                self.on_error("Please select at least one channel")
+            return False
+        
         try:
-            for channel in self.processed_data:
-                processed = DataProcessor.remove_offset(self.processed_data[channel])
-                self.processed_data[channel] = processed.tolist()
+            for channel in selected_channels:
+                if channel in self.processed_data:
+                    # Reset to original data for this channel first
+                    self.processed_data[channel] = self.original_data[channel].copy()
+                    
+                    # Apply offset removal
+                    processed = DataProcessor.remove_offset(self.processed_data[channel])
+                    self.processed_data[channel] = processed.tolist()
+                    
+                    # Update processing state
+                    self.channel_processing_state[channel] = {
+                        'type': 'offset_removal'
+                    }
             
-            message = "Removed DC offset"
+            channel_names = [f"Ch{ch}" for ch in selected_channels]
+            message = f"Removed DC offset from {', '.join(channel_names)}"
             self._update_processing_info(message)
             
             if self.on_processing_applied:
                 self.on_processing_applied(message, success=True)
+            
+            # Trigger plot update after processing
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -249,22 +347,43 @@ class WDQController:
                 self.on_error(error_msg)
             return False
     
-    def apply_normalization(self, method: str = 'minmax') -> bool:
-        """Normalize data using specified method."""
+    def apply_normalization(self, method: str, selected_channels: List[int]) -> bool:
+        """Normalize selected channels using specified method."""
         if not self._validate_loaded():
             return False
         
+        if not selected_channels:
+            if self.on_error:
+                self.on_error("Please select at least one channel")
+            return False
+        
         try:
-            for channel in self.processed_data:
-                normalized = DataProcessor.normalize_data(
-                    self.processed_data[channel], method)
-                self.processed_data[channel] = normalized.tolist()
+            for channel in selected_channels:
+                if channel in self.processed_data:
+                    # Reset to original data for this channel first
+                    self.processed_data[channel] = self.original_data[channel].copy()
+                    
+                    # Apply normalization
+                    normalized = DataProcessor.normalize_data(
+                        self.processed_data[channel], method)
+                    self.processed_data[channel] = normalized.tolist()
+                    
+                    # Update processing state
+                    self.channel_processing_state[channel] = {
+                        'type': 'normalization',
+                        'method': method
+                    }
             
-            message = f"Applied {method} normalization"
+            channel_names = [f"Ch{ch}" for ch in selected_channels]
+            message = f"Applied {method} normalization to {', '.join(channel_names)}"
             self._update_processing_info(message)
             
             if self.on_processing_applied:
                 self.on_processing_applied(message, success=True)
+            
+            # Trigger plot update after processing
+            if self.on_plot_update:
+                self.on_plot_update()
             
             return True
             
@@ -282,6 +401,8 @@ class WDQController:
         self.time_data = self.wfile.time()
         for channel in self.original_data:
             self.processed_data[channel] = self.original_data[channel].copy()
+            # Clear processing state
+            self.channel_processing_state[channel] = {}
         
         self._reset_processing_state()
         message = "Reset to original data"
@@ -289,6 +410,10 @@ class WDQController:
         
         if self.on_data_reset:
             self.on_data_reset(message)
+        
+        # Trigger plot update after reset
+        if self.on_plot_update:
+            self.on_plot_update()
         
         return True
     
@@ -343,21 +468,29 @@ class WDQController:
         base_name = self.filename.rsplit('.', 1)[0]
         return f"{base_name}{suffix}.png"
     
-    def _validate_loaded(self) -> bool:
-        """Internal validation that file is loaded."""
-        if not self.wfile:
-            if self.on_error:
-                self.on_error("Please load a file first")
-            return False
-        return True
-    
-    def _reset_processing_state(self):
-        """Reset processing state."""
-        self.processing_history = []
-    
-    def _update_processing_info(self, message: str):
-        """Update processing information."""
-        self.processing_history.append(message)
+    def get_channel_processing_info(self) -> Dict[int, str]:
+        """Get a summary of processing applied to each channel."""
+        processing_info = {}
+        
+        for channel, state in self.channel_processing_state.items():
+            if not state:
+                processing_info[channel] = "None"
+            else:
+                proc_type = state.get('type', 'Unknown')
+                if proc_type == 'moving_average':
+                    processing_info[channel] = f"MA({state['window_size']})"
+                elif proc_type == 'resampling':
+                    processing_info[channel] = f"Resample(÷{state['factor']})"
+                elif proc_type == 'lowpass_filter':
+                    processing_info[channel] = f"LPF({state['cutoff_freq']}Hz)"
+                elif proc_type == 'offset_removal':
+                    processing_info[channel] = "DC Removed"
+                elif proc_type == 'normalization':
+                    processing_info[channel] = f"Norm({state['method']})"
+                else:
+                    processing_info[channel] = proc_type
+        
+        return processing_info
     
     def get_channel_statistics(self) -> Dict:
         """Get basic statistics for all channels."""
@@ -380,3 +513,19 @@ class WDQController:
             }
         
         return stats
+    
+    def _validate_loaded(self) -> bool:
+        """Internal validation that file is loaded."""
+        if not self.wfile:
+            if self.on_error:
+                self.on_error("Please load a file first")
+            return False
+        return True
+    
+    def _reset_processing_state(self):
+        """Reset processing state."""
+        self.processing_history = []
+    
+    def _update_processing_info(self, message: str):
+        """Update processing information."""
+        self.processing_history.append(message)
