@@ -1,20 +1,18 @@
-"""Improved WDQ Analyzer with modern UI design."""
+"""
+Modern WDQ Analyzer UI - Clean separation of UI and business logic.
+This file focuses only on the user interface and delegates all business logic to WDQController.
+"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
-import numpy as np
-import pandas as pd
-import windaq as wdq
 
-from models import ChannelConfig
-from data_processor import DataProcessor
+from wdq_controller import WDQController
 from plot_manager import PlotManager
-from gui_components import GUIComponents
 
 
-class WDQAnalyzer:
-    """Main application class for WDQ data analysis with improved UI."""
+class ModernWDQAnalyzer:
+    """Modern UI for WDQ data analysis with clean architecture."""
     
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -22,19 +20,12 @@ class WDQAnalyzer:
         self.root.geometry("1400x900")
         self.root.minsize(1200, 800)
         
+        # Business logic controller
+        self.controller = WDQController()
+        self._setup_controller_callbacks()
+        
         # Configure modern styling
         self._configure_styling()
-        
-        # Data storage
-        self.wfile: Optional[wdq.windaq] = None
-        self.original_data: Dict[int, List[float]] = {}
-        self.processed_data: Dict[int, List[float]] = {}
-        self.time_data: Optional[np.ndarray] = None
-        self.filename: str = ""
-        self.channel_configs: Dict[int, ChannelConfig] = {}
-        
-        # Processing state
-        self.processing_history: List[str] = []
         
         # GUI components
         self.main_paned = None
@@ -45,13 +36,27 @@ class WDQAnalyzer:
         self.status_bar = None
         self.plot_manager = None
         
-        # Control variables
+        # UI state variables
         self.ma_window = tk.StringVar(value="10")
         self.resample_factor = tk.StringVar(value="2")
         self.cutoff_freq = tk.StringVar(value="10.0")
         self.sample_rate = tk.StringVar(value="100.0")
+        self.normalize_method = tk.StringVar(value="minmax")
+        
+        # Status labels for updates
+        self.process_info = None
+        self.status_label = None
         
         self._create_gui()
+    
+    def _setup_controller_callbacks(self):
+        """Setup callbacks from controller to update UI."""
+        self.controller.set_callbacks(
+            file_loaded=self._on_file_loaded,
+            processing_applied=self._on_processing_applied,
+            data_reset=self._on_data_reset,
+            error=self._on_error
+        )
     
     def _configure_styling(self):
         """Configure modern styling for the application."""
@@ -66,6 +71,8 @@ class WDQAnalyzer:
         style.configure('Header.TLabel', font=('Segoe UI', 12, 'bold'))
         style.configure('Subheader.TLabel', font=('Segoe UI', 10, 'bold'))
         style.configure('Status.TLabel', font=('Segoe UI', 9), foreground='#666666')
+        style.configure('Success.TLabel', font=('Segoe UI', 9), foreground='#2d8f2d')
+        style.configure('Error.TLabel', font=('Segoe UI', 9), foreground='#cc3333')
     
     def _create_gui(self):
         """Create the modern GUI structure."""
@@ -100,22 +107,24 @@ class WDQAnalyzer:
         
         # Modern load button
         load_btn = ttk.Button(title_frame, text="📁 Load WDQ File", 
-                             command=self.load_file)
+                             command=self._load_file)
         load_btn.pack(side=tk.RIGHT)
         
         # File info section
         self.file_info_frame = ttk.Frame(left_header)
         self.file_info_frame.pack(fill=tk.X)
         
-        self._create_file_info_display()
+        self._update_file_info_display()
     
-    def _create_file_info_display(self):
-        """Create attractive file information display."""
+    def _update_file_info_display(self):
+        """Update file information display."""
         # Clear existing
         for widget in self.file_info_frame.winfo_children():
             widget.destroy()
         
-        if not self.wfile:
+        file_info = self.controller.get_file_info()
+        
+        if not file_info.get("loaded", False):
             ttk.Label(self.file_info_frame, text="No file loaded", 
                      style='Status.TLabel').pack(anchor=tk.W)
             return
@@ -125,7 +134,7 @@ class WDQAnalyzer:
         info_frame.pack(fill=tk.X)
         
         # File name (prominent)
-        ttk.Label(info_frame, text=f"File: {self.filename}", 
+        ttk.Label(info_frame, text=f"File: {file_info['filename']}", 
                  style='Subheader.TLabel').grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
         
         # Stats in a clean row
@@ -133,10 +142,10 @@ class WDQAnalyzer:
         stats_frame.grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         
         stats = [
-            ("Channels", str(self.wfile.nChannels)),
-            ("Samples", f"{int(self.wfile.nSample):,}"),
-            ("Sample Rate", f"{1/self.wfile.timeStep:.1f} Hz"),
-            ("Duration", f"{self.wfile.nSample * self.wfile.timeStep:.1f} sec")
+            ("Channels", str(file_info['channels'])),
+            ("Samples", f"{file_info['samples']:,}"),
+            ("Sample Rate", f"{file_info['sample_rate']:.1f} Hz"),
+            ("Duration", f"{file_info['duration']:.1f} sec")
         ]
         
         for i, (label, value) in enumerate(stats):
@@ -176,6 +185,9 @@ class WDQAnalyzer:
         
         # Processing tab
         self._create_processing_tab(left_notebook)
+        
+        # Statistics tab
+        self._create_statistics_tab(left_notebook)
     
     def _create_channel_config_tab(self, notebook):
         """Create improved channel configuration tab."""
@@ -233,15 +245,15 @@ class WDQAnalyzer:
         axis_btn_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Button(axis_btn_frame, text="Primary", 
-                  command=lambda: self.set_axis_selection('Primary')).pack(side=tk.LEFT, padx=(0, 5))
+                  command=lambda: self._set_axis_selection('Primary')).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(axis_btn_frame, text="Secondary", 
-                  command=lambda: self.set_axis_selection('Secondary')).pack(side=tk.LEFT, padx=5)
+                  command=lambda: self._set_axis_selection('Secondary')).pack(side=tk.LEFT, padx=5)
         ttk.Button(axis_btn_frame, text="Hide", 
-                  command=lambda: self.set_axis_selection('Omit')).pack(side=tk.LEFT, padx=5)
+                  command=lambda: self._set_axis_selection('Omit')).pack(side=tk.LEFT, padx=5)
         
         # Update plot button
         ttk.Button(button_frame, text="🔄 Update Plot", 
-                  command=self.update_plot).pack(fill=tk.X)
+                  command=self._update_plot).pack(fill=tk.X)
     
     def _create_processing_tab(self, notebook):
         """Create improved processing tab."""
@@ -264,32 +276,53 @@ class WDQAnalyzer:
         # Moving Average section
         self._create_processing_section(scrollable_frame, "Moving Average", [
             ("Window Size:", self.ma_window, "samples"),
-            ("Apply", None, lambda: self.apply_moving_average())
+            ("Apply", None, lambda: self._apply_moving_average())
         ])
         
         # Resampling section
         self._create_processing_section(scrollable_frame, "Resampling", [
             ("Factor:", self.resample_factor, ""),
-            ("Apply", None, lambda: self.apply_resampling())
+            ("Apply", None, lambda: self._apply_resampling())
         ])
         
         # Low Pass Filter section
         self._create_processing_section(scrollable_frame, "Low Pass Filter", [
             ("Cutoff Freq:", self.cutoff_freq, "Hz"),
             ("Sample Rate:", self.sample_rate, "Hz"),
-            ("Apply", None, lambda: self.apply_lowpass_filter())
+            ("Apply", None, lambda: self._apply_lowpass_filter())
         ])
+        
+        # Normalization section
+        norm_section = ttk.LabelFrame(scrollable_frame, text="Normalization", padding=10)
+        norm_section.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Method selection
+        method_frame = ttk.Frame(norm_section)
+        method_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(method_frame, text="Method:").pack(side=tk.LEFT)
+        method_combo = ttk.Combobox(method_frame, textvariable=self.normalize_method, 
+                                   values=['minmax', 'zscore'], state='readonly', width=10)
+        method_combo.pack(side=tk.LEFT, padx=(5, 0))
+        
+        ttk.Button(norm_section, text="Apply Normalization", 
+                  command=self._apply_normalization).pack(fill=tk.X, pady=2)
+        
+        # Offset removal section
+        offset_section = ttk.LabelFrame(scrollable_frame, text="DC Offset", padding=10)
+        offset_section.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Button(offset_section, text="Remove DC Offset", 
+                  command=self._apply_offset_removal).pack(fill=tk.X, pady=2)
         
         # Action buttons
         action_frame = ttk.LabelFrame(scrollable_frame, text="Actions", padding=10)
         action_frame.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Button(action_frame, text="🔄 Reset to Original", 
-                  command=self.reset_data).pack(fill=tk.X, pady=2)
+                  command=self._reset_data).pack(fill=tk.X, pady=2)
         ttk.Button(action_frame, text="📊 Replot Data", 
-                  command=self.update_plot).pack(fill=tk.X, pady=2)
+                  command=self._update_plot).pack(fill=tk.X, pady=2)
         ttk.Button(action_frame, text="💾 Export CSV", 
-                  command=self.export_data).pack(fill=tk.X, pady=2)
+                  command=self._export_data).pack(fill=tk.X, pady=2)
         
         # Processing status
         status_frame = ttk.Frame(scrollable_frame)
@@ -298,12 +331,38 @@ class WDQAnalyzer:
         ttk.Label(status_frame, text="Processing Status:", 
                  style='Status.TLabel').pack(anchor=tk.W)
         self.process_info = ttk.Label(status_frame, text="No processing applied", 
-                                     style='Status.TLabel', foreground='green')
+                                     style='Success.TLabel')
         self.process_info.pack(anchor=tk.W, pady=(2, 0))
         
         # Pack canvas and scrollbar
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
+    def _create_statistics_tab(self, notebook):
+        """Create statistics display tab."""
+        stats_frame = ttk.Frame(notebook)
+        notebook.add(stats_frame, text="Statistics")
+        
+        # Header
+        header_frame = ttk.Frame(stats_frame)
+        header_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        ttk.Label(header_frame, text="Channel Statistics", 
+                 style='Subheader.TLabel').pack(anchor=tk.W)
+        
+        # Refresh button
+        ttk.Button(header_frame, text="🔄 Refresh", 
+                  command=self._update_statistics).pack(side=tk.RIGHT)
+        
+        # Statistics display area
+        self.stats_text = tk.Text(stats_frame, wrap=tk.WORD, height=15, 
+                                 font=('Consolas', 9))
+        stats_scroll = ttk.Scrollbar(stats_frame, orient=tk.VERTICAL, 
+                                   command=self.stats_text.yview)
+        self.stats_text.configure(yscrollcommand=stats_scroll.set)
+        
+        self.stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(0, 10))
+        stats_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=(0, 10))
     
     def _create_processing_section(self, parent, title, controls):
         """Create a processing section with consistent styling."""
@@ -341,9 +400,9 @@ class WDQAnalyzer:
         controls_frame.pack(side=tk.RIGHT)
         
         ttk.Button(controls_frame, text="💾 Save", 
-                  command=self.save_plot).pack(side=tk.LEFT, padx=2)
+                  command=self._save_plot).pack(side=tk.LEFT, padx=2)
         ttk.Button(controls_frame, text="🔄 Refresh", 
-                  command=self.update_plot).pack(side=tk.LEFT, padx=2)
+                  command=self._update_plot).pack(side=tk.LEFT, padx=2)
         
         # Plot area
         plot_container = ttk.Frame(self.right_panel)
@@ -357,119 +416,25 @@ class WDQAnalyzer:
         self.status_bar = ttk.Frame(parent, style='Card.TFrame')
         self.status_bar.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        ttk.Label(self.status_bar, text="Ready", 
-                 style='Status.TLabel').pack(side=tk.LEFT, padx=10, pady=5)
+        self.status_label = ttk.Label(self.status_bar, text="Ready", 
+                                     style='Status.TLabel')
+        self.status_label.pack(side=tk.LEFT, padx=10, pady=5)
     
-    def apply_lowpass_filter(self):
-        """Apply low pass filter to all channels."""
-        if not self._validate_file_loaded():
-            return
-        
-        try:
-            cutoff = float(self.cutoff_freq.get())
-            sample_rate = float(self.sample_rate.get())
-            
-            for channel in self.processed_data:
-                filtered = DataProcessor.apply_low_pass_filter(
-                    self.processed_data[channel], cutoff, sample_rate)
-                self.processed_data[channel] = filtered.tolist()
-            
-            self._update_processing_info(f"Applied low-pass filter (cutoff={cutoff}Hz)")
-            messagebox.showinfo("Success", f"Applied low-pass filter with cutoff {cutoff}Hz")
-            
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid filter parameters: {str(e)}")
-    
-    # Rest of methods remain the same as before...
-    def load_file(self):
-        """Load WDQ file and initialize data."""
+    # UI Event Handlers
+    def _load_file(self):
+        """Handle file loading UI interaction."""
         filename = filedialog.askopenfilename(
             title="Select WDQ File",
             filetypes=[("WDQ Files", "*.wdq"), ("All Files", "*.*")]
         )
         
-        if not filename:
-            return
-        
-        try:
-            self._load_wdq_file(filename)
-            self._create_file_info_display()  # Update file info display
-            self._populate_channel_table()
-            self._reset_processing_state()
-            
-            messagebox.showinfo("Success", f"Loaded {self.filename} successfully!")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load file: {str(e)}")
+        if filename:
+            self._update_status("Loading file...")
+            success = self.controller.load_file(filename)
+            if success:
+                self._update_status("File loaded successfully")
     
-    def _load_wdq_file(self, filename: str):
-        """Load WDQ file and extract data."""
-        self.wfile = wdq.windaq(filename)
-        self.filename = filename.split('/')[-1].split('\\')[-1]
-        
-        # Load time data
-        self.time_data = self.wfile.time()
-        
-        # Load channel data
-        self.original_data = {}
-        self.processed_data = {}
-        self.channel_configs = {}
-        
-        for channel in range(1, self.wfile.nChannels + 1):
-            data = self.wfile.data(channel)
-            self.original_data[channel] = data
-            self.processed_data[channel] = data.copy()
-            
-            # Create channel configuration
-            self.channel_configs[channel] = self._create_channel_config(channel)
-    
-    def _create_channel_config(self, channel: int) -> ChannelConfig:
-        """Create configuration for a channel with cleaned units."""
-        try:
-            name = self.wfile.chAnnotation(channel)
-            if not name or name.strip() == '':
-                name = f"Channel {channel}"
-        except:
-            name = f"Channel {channel}"
-        
-        try:
-            units = self.wfile.unit(channel)
-            if not units or units.strip() == '':
-                units = "N/A"
-            else:
-                # Clean up units - remove null characters and extra symbols
-                units = units.replace('\x00', '').strip()
-                # Remove common problematic characters
-                units = ''.join(c for c in units if c.isprintable() and c not in '[]')
-                if not units:
-                    units = "N/A"
-        except:
-            units = "N/A"
-        
-        # First channel primary, others secondary by default
-        axis = "Primary" if channel == 1 else "Secondary"
-        
-        return ChannelConfig(channel, name, units, axis)
-    
-    def _populate_channel_table(self):
-        """Populate channel configuration table."""
-        # Clear existing items
-        for item in self.channel_tree.get_children():
-            self.channel_tree.delete(item)
-        
-        # Add channels
-        for channel, config in self.channel_configs.items():
-            self.channel_tree.insert('', 'end', 
-                                   values=(config.channel_num, config.name, 
-                                          config.units, config.axis))
-    
-    def _reset_processing_state(self):
-        """Reset processing state."""
-        self.processing_history = []
-        if hasattr(self, 'process_info'):
-            self.process_info.config(text="No processing applied")
-    
-    def set_axis_selection(self, axis_type: str):
+    def _set_axis_selection(self, axis_type: str):
         """Set axis type for selected channels."""
         selected_items = self.channel_tree.selection()
         
@@ -483,105 +448,81 @@ class WDQAnalyzer:
             values[3] = axis_type
             self.channel_tree.item(item, values=values)
             
-            # Update channel config
-            self.channel_configs[channel_num].axis = axis_type
+            # Update controller
+            self.controller.update_channel_axis(channel_num, axis_type)
     
-    def apply_moving_average(self):
-        """Apply moving average to all channels."""
-        if not self._validate_file_loaded():
+    def _update_plot(self):
+        """Update the plot with current data."""
+        if not self.controller.is_file_loaded():
+            messagebox.showwarning("Warning", "Please load a file first")
             return
         
+        self._update_status("Updating plot...")
+        time_data, processed_data, channel_configs = self.controller.get_plot_data()
+        
+        self.plot_manager.update_plot(
+            time_data, processed_data, channel_configs, 
+            self.controller.get_file_info()['filename']
+        )
+        self._update_status("Plot updated")
+    
+    def _apply_moving_average(self):
+        """Apply moving average through controller."""
         try:
             window = int(self.ma_window.get())
-            
-            for channel in self.processed_data:
-                processed = DataProcessor.apply_moving_average(
-                    self.processed_data[channel], window)
-                self.processed_data[channel] = processed.tolist()
-            
-            self._update_processing_info(f"Applied moving average (window={window})")
-            messagebox.showinfo("Success", f"Applied moving average with window size {window}")
-            
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid window size: {str(e)}")
+            self.controller.apply_moving_average(window)
+        except ValueError:
+            messagebox.showerror("Error", "Invalid window size")
     
-    def apply_resampling(self):
-        """Apply resampling to data."""
-        if not self._validate_file_loaded():
-            return
-        
+    def _apply_resampling(self):
+        """Apply resampling through controller."""
         try:
             factor = int(self.resample_factor.get())
-            
-            # Resample time data
-            self.time_data = DataProcessor.resample_data(self.time_data, factor)
-            
-            # Resample channel data
-            for channel in self.processed_data:
-                resampled = DataProcessor.resample_data(
-                    self.processed_data[channel], factor)
-                self.processed_data[channel] = resampled.tolist()
-            
-            self._update_processing_info(f"Resampled by factor {factor}")
-            messagebox.showinfo("Success", f"Resampled data by factor {factor}")
-            
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid resample factor: {str(e)}")
+            self.controller.apply_resampling(factor)
+        except ValueError:
+            messagebox.showerror("Error", "Invalid resample factor")
     
-    def reset_data(self):
-        """Reset to original data."""
-        if not self.wfile:
-            return
-        
-        self.time_data = self.wfile.time()
-        for channel in self.original_data:
-            self.processed_data[channel] = self.original_data[channel].copy()
-        
-        self._reset_processing_state()
-        self._update_processing_info("Reset to original data")
-        messagebox.showinfo("Success", "Data reset to original")
+    def _apply_lowpass_filter(self):
+        """Apply low pass filter through controller."""
+        try:
+            cutoff = float(self.cutoff_freq.get())
+            sample_rate = float(self.sample_rate.get())
+            self.controller.apply_lowpass_filter(cutoff, sample_rate)
+        except ValueError:
+            messagebox.showerror("Error", "Invalid filter parameters")
     
-    def update_plot(self):
-        """Update the plot with current data."""
-        if not self._validate_file_loaded():
-            return
-        
-        # Update channel configs from tree
-        self._sync_channel_configs()
-        
-        # Update plot
-        self.plot_manager.update_plot(
-            self.time_data, 
-            self.processed_data, 
-            self.channel_configs, 
-            self.filename
-        )
+    def _apply_normalization(self):
+        """Apply normalization through controller."""
+        method = self.normalize_method.get()
+        self.controller.apply_normalization(method)
     
-    def _sync_channel_configs(self):
-        """Sync channel configurations from tree view."""
-        for item in self.channel_tree.get_children():
-            values = self.channel_tree.item(item)['values']
-            channel_num = int(values[0])
-            if channel_num in self.channel_configs:
-                self.channel_configs[channel_num].axis = values[3]
+    def _apply_offset_removal(self):
+        """Apply offset removal through controller."""
+        self.controller.apply_offset_removal()
     
-    def save_plot(self):
+    def _reset_data(self):
+        """Reset data through controller."""
+        self.controller.reset_data()
+    
+    def _save_plot(self):
         """Save the current plot."""
-        if not self._validate_file_loaded():
+        if not self.controller.is_file_loaded():
+            messagebox.showwarning("Warning", "Please load a file first")
             return
         
-        default_name = self.filename.rsplit('.', 1)[0] + "_plot.png"
+        default_name = self.controller.get_default_plot_name()
         saved_file = self.plot_manager.save_plot(default_name)
         
         if saved_file:
             messagebox.showinfo("Success", f"Plot saved to {saved_file}")
     
-    def export_data(self):
+    def _export_data(self):
         """Export processed data to CSV."""
-        if not self._validate_file_loaded():
+        if not self.controller.is_file_loaded():
+            messagebox.showwarning("Warning", "Please load a file first")
             return
         
-        default_name = self.filename.rsplit('.', 1)[0] + "_data.csv"
+        default_name = self.controller.get_default_export_name()
         filename = filedialog.asksaveasfilename(
             title="Export Data",
             defaultextension=".csv",
@@ -589,43 +530,96 @@ class WDQAnalyzer:
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         
-        if not filename:
+        if filename:
+            success = self.controller.export_to_csv(filename)
+            if success:
+                messagebox.showinfo("Success", f"Data exported to {filename}")
+    
+    def _update_statistics(self):
+        """Update the statistics display."""
+        if not self.controller.is_file_loaded():
+            self.stats_text.delete(1.0, tk.END)
+            self.stats_text.insert(1.0, "No file loaded")
             return
         
-        try:
-            self._export_to_csv(filename)
-            messagebox.showinfo("Success", f"Data exported to {filename}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
-    
-    def _export_to_csv(self, filename: str):
-        """Export data to CSV file."""
-        data_dict = {'Time': self.time_data}
+        stats = self.controller.get_channel_statistics()
         
-        for channel, config in self.channel_configs.items():
-            data_dict[config.label] = self.processed_data[channel]
+        # Clear and update text
+        self.stats_text.delete(1.0, tk.END)
         
-        df = pd.DataFrame(data_dict)
-        df.to_csv(filename, index=False)
+        if not stats:
+            self.stats_text.insert(1.0, "No data available")
+            return
+        
+        # Format statistics nicely
+        output = "Channel Statistics:\n\n"
+        
+        for channel, data in stats.items():
+            output += f"Channel {channel}: {data['name']}\n"
+            output += f"  Units: {data['units']}\n"
+            output += f"  Samples: {data['samples']:,}\n"
+            output += f"  Range: {data['min']:.3f} to {data['max']:.3f}\n"
+            output += f"  Mean: {data['mean']:.3f}\n"
+            output += f"  Std Dev: {data['std']:.3f}\n\n"
+        
+        self.stats_text.insert(1.0, output)
     
-    def _validate_file_loaded(self) -> bool:
-        """Check if file is loaded."""
-        if not self.wfile:
-            messagebox.showwarning("Warning", "Please load a file first")
-            return False
-        return True
+    def _update_status(self, message: str):
+        """Update status bar message."""
+        if self.status_label:
+            self.status_label.config(text=message)
+        self.root.update_idletasks()
     
-    def _update_processing_info(self, message: str):
-        """Update processing information display."""
-        self.processing_history.append(message)
-        if hasattr(self, 'process_info'):
-            self.process_info.config(text=message)
+    def _populate_channel_table(self):
+        """Populate channel configuration table."""
+        # Clear existing items
+        for item in self.channel_tree.get_children():
+            self.channel_tree.delete(item)
+        
+        # Get channel data from controller
+        channel_data = self.controller.get_channel_data()
+        
+        # Add channels
+        for channel_num, name, units, axis in channel_data:
+            self.channel_tree.insert('', 'end', 
+                                   values=(channel_num, name, units, axis))
+    
+    # Controller Callback Handlers
+    def _on_file_loaded(self, file_info: Dict):
+        """Called when controller loads a file."""
+        self._update_file_info_display()
+        self._populate_channel_table()
+        self._update_statistics()
+    
+    def _on_processing_applied(self, message: str, success: bool = True):
+        """Called when controller applies processing."""
+        if self.process_info:
+            style = 'Success.TLabel' if success else 'Error.TLabel'
+            self.process_info.config(text=message, style=style)
+        
+        self._update_statistics()  # Update stats after processing
+        
+        if success:
+            messagebox.showinfo("Success", message)
+    
+    def _on_data_reset(self, message: str):
+        """Called when controller resets data."""
+        if self.process_info:
+            self.process_info.config(text=message, style='Success.TLabel')
+        
+        self._update_statistics()
+        messagebox.showinfo("Success", message)
+    
+    def _on_error(self, error_message: str):
+        """Called when controller encounters an error."""
+        messagebox.showerror("Error", error_message)
+        self._update_status(f"Error: {error_message}")
 
 
 def main():
     """Main entry point."""
     root = tk.Tk()
-    app = WDQAnalyzer(root)
+    app = ModernWDQAnalyzer(root)
     root.mainloop()
 
 

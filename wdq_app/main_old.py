@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-WDQ Data Analyzer - Main Entry Point (Updated)
+WDQ Data Analyzer - Main Entry Point
 
 A tool for analyzing and visualizing WinDAQ (.wdq) data files.
-Now with clean separation of UI and business logic.
 """
 
 import sys
@@ -36,8 +35,7 @@ except ImportError as e:
     
     sys.exit(1)
 
-# Import the modern UI version
-from modern_wdq_analyzer import main
+from wdq_analyzer import main
 
 if __name__ == "__main__":
     main()
