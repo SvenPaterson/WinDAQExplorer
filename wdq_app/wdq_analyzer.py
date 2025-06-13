@@ -1,122 +1,16 @@
+"""Main WDQ Analyzer application."""
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from typing import Dict, List, Optional, Tuple
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 import windaq as wdq
 
-
-class ChannelConfig:
-    """Configuration for a single channel."""
-    
-    def __init__(self, channel_num: int, name: str = "", units: str = "N/A", axis: str = "Primary"):
-        self.channel_num = channel_num
-        self.name = name or f"Channel {channel_num}"
-        self.units = units
-        self.axis = axis
-    
-    @property
-    def label(self) -> str:
-        """Generate label for plotting."""
-        return f"{self.name} ({self.units})" if self.units != "N/A" else self.name
-
-
-class DataProcessor:
-    """Handles data processing operations."""
-    
-    @staticmethod
-    def apply_moving_average(data: np.ndarray, window_size: int) -> np.ndarray:
-        """Apply moving average to data."""
-        if window_size < 1:
-            raise ValueError("Window size must be positive")
-        return np.convolve(data, np.ones(window_size) / window_size, mode='same')
-    
-    @staticmethod
-    def resample_data(data: np.ndarray, factor: int) -> np.ndarray:
-        """Downsample data by given factor."""
-        if factor < 1:
-            raise ValueError("Resample factor must be positive")
-        return data[::factor]
-
-
-class PlotManager:
-    """Manages plot creation and updates."""
-    
-    def __init__(self, parent_frame: ttk.Frame):
-        self.parent_frame = parent_frame
-        self.fig = None
-        self.ax1 = None
-        self.ax2 = None
-        self.canvas = None
-        self._setup_plot()
-    
-    def _setup_plot(self):
-        """Initialize plot components."""
-        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(10, 8))
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.parent_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-    
-    def update_plot(self, time_data: np.ndarray, channel_data: Dict[int, List[float]], 
-                    channel_configs: Dict[int, ChannelConfig], filename: str):
-        """Update the plot with new data."""
-        self.ax1.clear()
-        self.ax2.clear()
-        
-        primary_channels = [ch for ch, config in channel_configs.items() 
-                          if config.axis == "Primary"]
-        secondary_channels = [ch for ch, config in channel_configs.items() 
-                            if config.axis == "Secondary"]
-        
-        # Plot primary channels
-        if primary_channels:
-            self._plot_channels(self.ax1, time_data, channel_data, channel_configs, 
-                              primary_channels, f'Primary Channels - {filename}', 'Primary Channels')
-        
-        # Plot secondary channels
-        if secondary_channels:
-            self._plot_channels(self.ax2, time_data, channel_data, channel_configs, 
-                              secondary_channels, 'Secondary Channels', 'Secondary Channels')
-            self.ax2.set_visible(True)
-        else:
-            self.ax2.set_visible(False)
-        
-        plt.tight_layout()
-        self.canvas.draw()
-    
-    def _plot_channels(self, ax, time_data: np.ndarray, channel_data: Dict[int, List[float]], 
-                      channel_configs: Dict[int, ChannelConfig], channels: List[int], 
-                      title: str, ylabel: str):
-        """Plot channels on given axis."""
-        colors = ['b', 'r', 'g', 'm', 'c', 'y', 'k', 'orange', 'purple', 'brown', 'pink']
-        
-        for i, channel in enumerate(channels):
-            config = channel_configs[channel]
-            color = colors[i % len(colors)] if ax == self.ax2 else None
-            ax.plot(time_data, channel_data[channel], 
-                   label=config.label, linewidth=1.5 if ax == self.ax1 else 1,
-                   color=color)
-        
-        ax.set_xlabel('Time (seconds)')
-        ax.set_ylabel(ylabel)
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        ax.set_title(title)
-    
-    def save_plot(self, default_filename: str = "plot.png"):
-        """Save the current plot to file."""
-        filename = filedialog.asksaveasfilename(
-            title="Save Plot",
-            defaultextension=".png",
-            initialfile=default_filename,
-            filetypes=[("PNG files", "*.png"), ("PDF files", "*.pdf"), ("All files", "*.*")]
-        )
-        
-        if filename:
-            self.fig.savefig(filename, dpi=300, bbox_inches='tight')
-            return filename
-        return None
+from models import ChannelConfig
+from data_processor import DataProcessor
+from plot_manager import PlotManager
+from gui_components import GUIComponents
 
 
 class WDQAnalyzer:
@@ -166,7 +60,8 @@ class WDQAnalyzer:
         
         ttk.Button(top_frame, text="Load WDQ File", command=self.load_file).pack(side=tk.LEFT)
         
-        self.file_info_label = ttk.Label(top_frame, text="No file loaded")
+        self.file_info_label = GUIComponents.create_status_label(top_frame, "No file loaded")
+        self.file_info_label.config(foreground="black")
         self.file_info_label.pack(side=tk.LEFT, padx=(20, 0))
     
     def _create_notebook(self, parent: ttk.Frame):
@@ -189,50 +84,27 @@ class WDQAnalyzer:
                  font=('Arial', 12, 'bold')).pack(pady=(0, 10))
         
         # Channel table
-        self._create_channel_table(config_frame)
-        
-        # Axis selection controls
-        self._create_axis_controls(config_frame)
-        
-        # Update button
-        ttk.Button(config_frame, text="Update Plot", 
-                  command=self.update_plot).pack(pady=10)
-    
-    def _create_channel_table(self, parent: ttk.Frame):
-        """Create channel configuration table."""
-        tree_frame = ttk.Frame(parent)
+        columns = ('Channel', 'Name', 'Units', 'Plot Axis')
+        self.channel_tree, _, tree_frame = GUIComponents.create_treeview_with_scrollbar(
+            config_frame, columns, height=10)
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        columns = ('Channel', 'Name', 'Units', 'Plot Axis')
-        self.channel_tree = ttk.Treeview(tree_frame, columns=columns, 
-                                       show='headings', height=10)
-        
-        # Configure columns
-        for col in columns:
-            self.channel_tree.heading(col, text=col)
-            self.channel_tree.column(col, width=150)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, 
-                                command=self.channel_tree.yview)
-        self.channel_tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.channel_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    
-    def _create_axis_controls(self, parent: ttk.Frame):
-        """Create axis selection controls."""
-        axis_frame = ttk.Frame(parent)
+        # Axis selection controls
+        axis_frame = ttk.Frame(config_frame)
         axis_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(axis_frame, text="Set selected channels to:").pack(side=tk.LEFT)
         
-        for text, value in [("Primary Axis", "Primary"), 
-                           ("Secondary Axis", "Secondary"), 
-                           ("Omit", "Omit")]:
-            ttk.Button(axis_frame, text=text,
-                      command=lambda v=value: self.set_axis_selection(v)
-                      ).pack(side=tk.LEFT, padx=(10 if text == "Primary Axis" else 5, 5))
+        buttons = [
+            ("Primary Axis", lambda: self.set_axis_selection('Primary')),
+            ("Secondary Axis", lambda: self.set_axis_selection('Secondary')),
+            ("Omit", lambda: self.set_axis_selection('Omit'))
+        ]
+        GUIComponents.create_button_row(axis_frame, buttons, padx=5)
+        
+        # Update button
+        ttk.Button(config_frame, text="Update Plot", 
+                  command=self.update_plot).pack(pady=10)
     
     def _create_processing_tab(self):
         """Create data processing tab."""
@@ -240,43 +112,31 @@ class WDQAnalyzer:
         self.notebook.add(process_frame, text="Data Processing")
         
         # Moving average section
-        self._create_moving_average_section(process_frame)
-        
-        # Resampling section
-        self._create_resampling_section(process_frame)
-        
-        # Action buttons
-        self._create_action_buttons(process_frame)
-        
-        # Processing info
-        self.process_info = ttk.Label(process_frame, text="No processing applied", 
-                                    foreground="blue")
-        self.process_info.pack(pady=10)
-    
-    def _create_moving_average_section(self, parent: ttk.Frame):
-        """Create moving average controls."""
-        ma_frame = ttk.LabelFrame(parent, text="Moving Average", padding=10)
+        ma_frame = GUIComponents.create_labeled_frame(process_frame, "Moving Average")
         ma_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(ma_frame, text="Window Size (samples):").pack(side=tk.LEFT)
-        ttk.Entry(ma_frame, textvariable=self.ma_window, width=10).pack(side=tk.LEFT, padx=(5, 10))
+        label, entry = GUIComponents.create_entry_with_label(
+            ma_frame, "Window Size (samples):", self.ma_window)
+        label.pack(side=tk.LEFT)
+        entry.pack(side=tk.LEFT, padx=(5, 10))
+        
         ttk.Button(ma_frame, text="Apply Moving Average", 
                   command=self.apply_moving_average).pack(side=tk.LEFT)
-    
-    def _create_resampling_section(self, parent: ttk.Frame):
-        """Create resampling controls."""
-        resample_frame = ttk.LabelFrame(parent, text="Resampling", padding=10)
+        
+        # Resampling section
+        resample_frame = GUIComponents.create_labeled_frame(process_frame, "Resampling")
         resample_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(resample_frame, text="Downsample by factor:").pack(side=tk.LEFT)
-        ttk.Entry(resample_frame, textvariable=self.resample_factor, 
-                 width=10).pack(side=tk.LEFT, padx=(5, 10))
+        label, entry = GUIComponents.create_entry_with_label(
+            resample_frame, "Downsample by factor:", self.resample_factor)
+        label.pack(side=tk.LEFT)
+        entry.pack(side=tk.LEFT, padx=(5, 10))
+        
         ttk.Button(resample_frame, text="Apply Resampling", 
                   command=self.apply_resampling).pack(side=tk.LEFT)
-    
-    def _create_action_buttons(self, parent: ttk.Frame):
-        """Create action buttons."""
-        action_frame = ttk.Frame(parent)
+        
+        # Action buttons
+        action_frame = ttk.Frame(process_frame)
         action_frame.pack(fill=tk.X, pady=10)
         
         buttons = [
@@ -284,10 +144,12 @@ class WDQAnalyzer:
             ("Replot Data", self.update_plot),
             ("Export Data to CSV", self.export_data)
         ]
+        GUIComponents.create_button_row(action_frame, buttons, padx=10)
         
-        for i, (text, command) in enumerate(buttons):
-            ttk.Button(action_frame, text=text, command=command).pack(
-                side=tk.LEFT, padx=(0 if i == 0 else 10, 0))
+        # Processing info
+        self.process_info = GUIComponents.create_status_label(
+            process_frame, "No processing applied")
+        self.process_info.pack(pady=10)
     
     def _create_plot_tab(self):
         """Create plot view tab."""
@@ -298,10 +160,11 @@ class WDQAnalyzer:
         plot_controls = ttk.Frame(plot_frame)
         plot_controls.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(plot_controls, text="Save Plot", 
-                  command=self.save_plot).pack(side=tk.LEFT)
-        ttk.Button(plot_controls, text="Refresh Plot", 
-                  command=self.update_plot).pack(side=tk.LEFT, padx=(10, 0))
+        buttons = [
+            ("Save Plot", self.save_plot),
+            ("Refresh Plot", self.update_plot)
+        ]
+        GUIComponents.create_button_row(plot_controls, buttons, padx=10)
         
         # Initialize plot manager
         self.plot_manager = PlotManager(plot_frame)
@@ -314,6 +177,53 @@ class WDQAnalyzer:
         )
         
         if not filename:
+            return
+        
+        try:
+            self._export_to_csv(filename)
+            messagebox.showinfo("Success", f"Data exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}") not filename:
+            return
+        
+        try:
+            self._export_to_csv(filename)
+            messagebox.showinfo("Success", f"Data exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
+    
+    def _export_to_csv(self, filename: str):
+        """Export data to CSV file."""
+        data_dict = {'Time': self.time_data}
+        
+        for channel, config in self.channel_configs.items():
+            data_dict[config.label] = self.processed_data[channel]
+        
+        df = pd.DataFrame(data_dict)
+        df.to_csv(filename, index=False)
+    
+    def _validate_file_loaded(self) -> bool:
+        """Check if file is loaded."""
+        if not self.wfile:
+            messagebox.showwarning("Warning", "Please load a file first")
+            return False
+        return True
+    
+    def _update_processing_info(self, message: str):
+        """Update processing information display."""
+        self.processing_history.append(message)
+        self.process_info.config(text=message)
+
+
+def main():
+    """Main entry point."""
+    root = tk.Tk()
+    app = WDQAnalyzer(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main() not filename:
             return
         
         try:
@@ -417,8 +327,8 @@ class WDQAnalyzer:
             window = int(self.ma_window.get())
             
             for channel in self.processed_data:
-                data = np.array(self.processed_data[channel])
-                processed = DataProcessor.apply_moving_average(data, window)
+                processed = DataProcessor.apply_moving_average(
+                    self.processed_data[channel], window)
                 self.processed_data[channel] = processed.tolist()
             
             self._update_processing_info(f"Applied moving average (window={window})")
@@ -440,8 +350,8 @@ class WDQAnalyzer:
             
             # Resample channel data
             for channel in self.processed_data:
-                data = np.array(self.processed_data[channel])
-                resampled = DataProcessor.resample_data(data, factor)
+                resampled = DataProcessor.resample_data(
+                    self.processed_data[channel], factor)
                 self.processed_data[channel] = resampled.tolist()
             
             self._update_processing_info(f"Resampled by factor {factor}")
@@ -513,44 +423,4 @@ class WDQAnalyzer:
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         
-        if not filename:
-            return
-        
-        try:
-            self._export_to_csv(filename)
-            messagebox.showinfo("Success", f"Data exported to {filename}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
-    
-    def _export_to_csv(self, filename: str):
-        """Export data to CSV file."""
-        data_dict = {'Time': self.time_data}
-        
-        for channel, config in self.channel_configs.items():
-            data_dict[config.label] = self.processed_data[channel]
-        
-        df = pd.DataFrame(data_dict)
-        df.to_csv(filename, index=False)
-    
-    def _validate_file_loaded(self) -> bool:
-        """Check if file is loaded."""
-        if not self.wfile:
-            messagebox.showwarning("Warning", "Please load a file first")
-            return False
-        return True
-    
-    def _update_processing_info(self, message: str):
-        """Update processing information display."""
-        self.processing_history.append(message)
-        self.process_info.config(text=message)
-
-
-def main():
-    """Main entry point."""
-    root = tk.Tk()
-    app = WDQAnalyzer(root)
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    main()
+        if
