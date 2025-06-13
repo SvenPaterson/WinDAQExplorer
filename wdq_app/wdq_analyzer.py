@@ -180,53 +180,6 @@ class WDQAnalyzer:
             return
         
         try:
-            self._export_to_csv(filename)
-            messagebox.showinfo("Success", f"Data exported to {filename}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export data: {str(e)}") not filename:
-            return
-        
-        try:
-            self._export_to_csv(filename)
-            messagebox.showinfo("Success", f"Data exported to {filename}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
-    
-    def _export_to_csv(self, filename: str):
-        """Export data to CSV file."""
-        data_dict = {'Time': self.time_data}
-        
-        for channel, config in self.channel_configs.items():
-            data_dict[config.label] = self.processed_data[channel]
-        
-        df = pd.DataFrame(data_dict)
-        df.to_csv(filename, index=False)
-    
-    def _validate_file_loaded(self) -> bool:
-        """Check if file is loaded."""
-        if not self.wfile:
-            messagebox.showwarning("Warning", "Please load a file first")
-            return False
-        return True
-    
-    def _update_processing_info(self, message: str):
-        """Update processing information display."""
-        self.processing_history.append(message)
-        self.process_info.config(text=message)
-
-
-def main():
-    """Main entry point."""
-    root = tk.Tk()
-    app = WDQAnalyzer(root)
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    main() not filename:
-            return
-        
-        try:
             self._load_wdq_file(filename)
             self._update_file_info()
             self._populate_channel_table()
@@ -423,4 +376,44 @@ if __name__ == "__main__":
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         
-        if
+        if not filename:
+            return
+        
+        try:
+            self._export_to_csv(filename)
+            messagebox.showinfo("Success", f"Data exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
+    
+    def _export_to_csv(self, filename: str):
+        """Export data to CSV file."""
+        data_dict = {'Time': self.time_data}
+        
+        for channel, config in self.channel_configs.items():
+            data_dict[config.label] = self.processed_data[channel]
+        
+        df = pd.DataFrame(data_dict)
+        df.to_csv(filename, index=False)
+    
+    def _validate_file_loaded(self) -> bool:
+        """Check if file is loaded."""
+        if not self.wfile:
+            messagebox.showwarning("Warning", "Please load a file first")
+            return False
+        return True
+    
+    def _update_processing_info(self, message: str):
+        """Update processing information display."""
+        self.processing_history.append(message)
+        self.process_info.config(text=message)
+
+
+def main():
+    """Main entry point."""
+    root = tk.Tk()
+    app = WDQAnalyzer(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
