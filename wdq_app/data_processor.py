@@ -26,6 +26,11 @@ class DataProcessor:
             raise ValueError("Window size must be positive")
         
         data_array = np.array(data)
+        
+        # Handle empty data
+        if len(data_array) == 0:
+            return data_array
+        
         return np.convolve(data_array, np.ones(window_size) / window_size, mode='same')
     
     @staticmethod

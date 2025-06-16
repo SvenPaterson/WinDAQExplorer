@@ -23,7 +23,7 @@ class ChannelConfig:
     @property
     def label(self) -> str:
         """Generate label for plotting."""
-        return f"{self.name} ({self.units})" if self.units != "N/A" else self.name
+        return f"{self.name} ({self.units})" if self.units and self.units != "N/A" else self.name
     
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
