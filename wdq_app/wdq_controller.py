@@ -62,6 +62,9 @@ class WDQController:
             if self.on_file_loaded:
                 self.on_file_loaded(self.get_file_info())
             
+            # Assign auto colors to all channels
+            self.assign_auto_colors()
+            
             # Trigger initial plot update
             if self.on_plot_update:
                 self.on_plot_update()
@@ -123,7 +126,12 @@ class WDQController:
         # First channel primary, others secondary by default
         axis = "Primary" if channel == 1 else "Secondary"
         
-        return ChannelConfig(channel, name, units, axis)
+        # Create enhanced config with subplot support
+        config = ChannelConfig(channel, name, units, axis)
+        config.subplot = 1  # Default all to subplot 1
+        config.color = "auto"  # Default to auto color assignment
+        
+        return config
     
     def get_file_info(self) -> Dict:
         """Get file information for display."""
@@ -153,6 +161,28 @@ class WDQController:
             self.channel_configs[channel].axis = axis
             
             # Trigger plot update when axis changes
+            if self.on_plot_update:
+                self.on_plot_update()
+    
+    def update_channel_subplot(self, channel: int, subplot: int):
+        """Update the subplot assignment for a channel."""
+        if channel in self.channel_configs:
+            self.channel_configs[channel].subplot = subplot
+            
+            # Trigger plot update when subplot changes
+            if self.on_plot_update:
+                self.on_plot_update()
+    
+    def update_channel_color(self, channel: int, color: str):
+        """Update the color assignment for a channel."""
+        if channel in self.channel_configs:
+            self.channel_configs[channel].color = color
+            
+            # If set to auto, reassign all auto colors
+            if color == "auto":
+                self.assign_auto_colors()
+            
+            # Trigger plot update when color changes
             if self.on_plot_update:
                 self.on_plot_update()
     
@@ -514,6 +544,38 @@ class WDQController:
         
         return stats
     
+    def get_color_names(self) -> List[str]:
+        """Get list of available color names for UI."""
+        return ["Auto", "Blue", "Orange", "Green", "Red", "Purple", 
+                "Brown", "Pink", "Gray", "Olive", "Cyan"]
+    
+    def get_color_options(self) -> List[str]:
+        """Get list of color hex codes corresponding to color names."""
+        return ["auto", "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", 
+                "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+    
+    def assign_auto_colors(self):
+        """Assign automatic colors to channels that have 'auto' color setting."""
+        # Color palette
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", 
+                  "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+        
+        # Group channels by subplot
+        from collections import defaultdict
+        subplot_groups = defaultdict(list)
+        
+        for channel, config in self.channel_configs.items():
+            if config.color == "auto" or config.color == "#auto":
+                subplot_groups[config.subplot].append(channel)
+        
+        # Assign colors within each subplot group
+        for subplot, channels in subplot_groups.items():
+            for i, channel in enumerate(channels):
+                self.channel_configs[channel].color = colors[i % len(colors)]
+    
+    def _validate_loaded(self) -> bool:
+        """Internal validation that file is loaded."""
+        
     def _validate_loaded(self) -> bool:
         """Internal validation that file is loaded."""
         if not self.wfile:

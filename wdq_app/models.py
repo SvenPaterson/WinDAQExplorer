@@ -12,6 +12,8 @@ class ChannelConfig:
     name: str = ""
     units: str = "N/A"
     axis: str = "Primary"
+    subplot: int = 1  # Field for subplot assignment
+    color: str = "auto"  # New field for color assignment
     
     def __post_init__(self):
         """Post-initialization processing."""
@@ -29,7 +31,9 @@ class ChannelConfig:
             'channel_num': self.channel_num,
             'name': self.name,
             'units': self.units,
-            'axis': self.axis
+            'axis': self.axis,
+            'subplot': self.subplot,
+            'color': self.color
         }
     
     @classmethod

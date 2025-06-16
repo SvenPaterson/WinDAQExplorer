@@ -6,6 +6,7 @@ This file focuses only on the user interface and delegates all business logic to
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
+import matplotlib.pyplot as plt
 
 from wdq_controller import WDQController
 from plot_manager import PlotManager
@@ -19,6 +20,9 @@ class ModernWDQAnalyzer:
         self.root.title("WDQ Data Analyzer")
         self.root.geometry("1400x900")
         self.root.minsize(1200, 800)
+        
+        # Handle window close properly
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         
         # Business logic controller
         self.controller = WDQController()
@@ -47,11 +51,30 @@ class ModernWDQAnalyzer:
         self.channel_vars = {}  # Will hold checkboxes for each channel
         self.checkbox_frame = None
         
+        # Channel dropdown variables for axis, subplot, and color assignment
+        self.axis_vars = {}     # Dropdown variables for axis assignment
+        self.subplot_vars = {}  # Dropdown variables for subplot assignment
+        self.color_vars = {}    # Dropdown variables for color assignment
+        
         # Status labels for updates
         self.process_info = None
         self.status_label = None
         
         self._create_gui()
+    
+    def _on_closing(self):
+        """Handle application closing properly."""
+        try:
+            # Close matplotlib figures properly
+            plt.close('all')
+            
+            # Destroy the root window
+            self.root.quit()
+            self.root.destroy()
+        except:
+            # Force exit if normal cleanup fails
+            import sys
+            sys.exit()
     
     def _setup_controller_callbacks(self):
         """Setup callbacks from controller to update UI."""
@@ -195,7 +218,7 @@ class ModernWDQAnalyzer:
         self._create_statistics_tab(left_notebook)
     
     def _create_channel_config_tab(self, notebook):
-        """Create improved channel configuration tab."""
+        """Create improved channel configuration tab with dropdowns."""
         config_frame = ttk.Frame(notebook)
         notebook.add(config_frame, text="Channels")
         
@@ -207,54 +230,135 @@ class ModernWDQAnalyzer:
                  style='Subheader.TLabel').pack(anchor=tk.W)
         
         # Instructions
-        ttk.Label(header_frame, text="Select channels and assign to plot axes:", 
+        ttk.Label(header_frame, text="Configure each channel's axis and subplot:", 
                  style='Status.TLabel').pack(anchor=tk.W, pady=(2, 0))
         
-        # Channel table with improved styling
-        table_frame = ttk.Frame(config_frame)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Scrollable frame for channel configuration
+        canvas = tk.Canvas(config_frame)
+        scrollbar = ttk.Scrollbar(config_frame, orient=tk.VERTICAL, command=canvas.yview)
+        self.channel_config_frame = ttk.Frame(canvas)
         
-        # Treeview with scrollbar - now includes Processing column
-        columns = ('Ch#', 'Name', 'Units', 'Axis', 'Processing')
-        tree_container = ttk.Frame(table_frame)
-        tree_container.pack(fill=tk.BOTH, expand=True)
+        self.channel_config_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
         
-        self.channel_tree = ttk.Treeview(tree_container, columns=columns, 
-                                        show='headings', height=8)
+        canvas.create_window((0, 0), window=self.channel_config_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Configure columns with better widths
-        col_widths = {'Ch#': 40, 'Name': 100, 'Units': 60, 'Axis': 70, 'Processing': 100}
-        for col in columns:
-            self.channel_tree.heading(col, text=col)
-            self.channel_tree.column(col, width=col_widths[col], minwidth=30)
+        # Pack canvas and scrollbar
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+    
+    def _update_channel_config_dropdowns(self):
+        """Update channel configuration with dropdowns."""
+        # Clear existing
+        for widget in self.channel_config_frame.winfo_children():
+            widget.destroy()
         
-        # Scrollbar
-        tree_scroll = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, 
-                                   command=self.channel_tree.yview)
-        self.channel_tree.configure(yscrollcommand=tree_scroll.set)
+        self.axis_vars = {}
+        self.subplot_vars = {}
+        self.color_vars = {}
         
-        self.channel_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        if not self.controller.is_file_loaded():
+            ttk.Label(self.channel_config_frame, text="No file loaded", 
+                     style='Status.TLabel').pack(padx=10, pady=10)
+            return
         
-        # Control buttons
-        button_frame = ttk.Frame(config_frame)
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Get channel data
+        channel_data = self.controller.get_channel_data()
+        num_channels = len(channel_data)
         
-        # Axis assignment buttons in a clean row
-        axis_label_frame = ttk.Frame(button_frame)
-        axis_label_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(axis_label_frame, text="Assign selected to:", 
-                 style='Status.TLabel').pack(anchor=tk.W)
+        # Create header row
+        header_frame = ttk.Frame(self.channel_config_frame)
+        header_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
         
-        axis_btn_frame = ttk.Frame(button_frame)
-        axis_btn_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(header_frame, text="Channel", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 15))
+        ttk.Label(header_frame, text="Name", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=1, sticky=tk.W, padx=(0, 15))
+        ttk.Label(header_frame, text="Units", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=2, sticky=tk.W, padx=(0, 15))
+        ttk.Label(header_frame, text="Y-Axis", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=3, sticky=tk.W, padx=(0, 15))
+        ttk.Label(header_frame, text="Subplot", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=4, sticky=tk.W, padx=(0, 15))
+        ttk.Label(header_frame, text="Color", font=('Segoe UI', 9, 'bold')).grid(
+            row=0, column=5, sticky=tk.W)
         
-        ttk.Button(axis_btn_frame, text="Primary", 
-                  command=lambda: self._set_axis_selection('Primary')).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(axis_btn_frame, text="Secondary", 
-                  command=lambda: self._set_axis_selection('Secondary')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(axis_btn_frame, text="Hide", 
-                  command=lambda: self._set_axis_selection('Omit')).pack(side=tk.LEFT, padx=5)
+        # Create dropdown options
+        axis_options = ["Primary", "Secondary", "Hide"]
+        subplot_options = [str(i) for i in range(1, num_channels + 1)]
+        
+        # Get color options from controller
+        color_names = self.controller.get_color_names()
+
+        # Create channel configuration rows
+        for i, (channel_num, name, units, current_axis) in enumerate(channel_data):
+            # Create variables for this channel
+            self.axis_vars[channel_num] = tk.StringVar(value=current_axis)
+            self.subplot_vars[channel_num] = tk.StringVar(value="1")  # Default to subplot 1
+            self.color_vars[channel_num] = tk.StringVar(value="auto")
+            
+            # Create row frame
+            row_frame = ttk.Frame(self.channel_config_frame)
+            row_frame.pack(fill=tk.X, padx=10, pady=2)
+            
+            # Channel info
+            ttk.Label(row_frame, text=f"Ch{channel_num}").grid(
+                row=0, column=0, sticky=tk.W, padx=(0, 15))
+            ttk.Label(row_frame, text=name[:15] + "..." if len(name) > 15 else name).grid(
+                row=0, column=1, sticky=tk.W, padx=(0, 15))
+            ttk.Label(row_frame, text=units).grid(
+                row=0, column=2, sticky=tk.W, padx=(0, 15))
+            
+            # Y-Axis dropdown
+            axis_combo = ttk.Combobox(row_frame, textvariable=self.axis_vars[channel_num],
+                                     values=axis_options, state='readonly', width=10)
+            axis_combo.grid(row=0, column=3, sticky=tk.W, padx=(0, 15))
+            axis_combo.bind('<<ComboboxSelected>>', 
+                           lambda e, ch=channel_num: self._on_axis_changed(ch))
+            
+            # Subplot dropdown
+            subplot_combo = ttk.Combobox(row_frame, textvariable=self.subplot_vars[channel_num],
+                                        values=subplot_options, state='readonly', width=8)
+            subplot_combo.grid(row=0, column=4, sticky=tk.W, padx=(0, 15))
+            subplot_combo.bind('<<ComboboxSelected>>', 
+                              lambda e, ch=channel_num: self._on_subplot_changed(ch))
+            
+            # Color dropdown
+            color_combo = ttk.Combobox(row_frame, textvariable=self.color_vars[channel_num],
+                                      values=color_names, state='readonly', width=12)
+            color_combo.grid(row=0, column=5, sticky=tk.W)
+            color_combo.bind('<<ComboboxSelected>>', 
+                            lambda e, ch=channel_num: self._on_color_changed(ch))
+    
+    def _on_axis_changed(self, channel_num: int):
+        """Handle axis assignment change."""
+        new_axis = self.axis_vars[channel_num].get()
+        self.controller.update_channel_axis(channel_num, new_axis)
+        
+        # Also update subplot assignment in controller
+        subplot = int(self.subplot_vars[channel_num].get())
+        self.controller.update_channel_subplot(channel_num, subplot)
+    
+    def _on_subplot_changed(self, channel_num: int):
+        """Handle subplot assignment change."""
+        subplot = int(self.subplot_vars[channel_num].get())
+        self.controller.update_channel_subplot(channel_num, subplot)
+    
+    def _on_color_changed(self, channel_num: int):
+        """Handle color assignment change."""
+        color_name = self.color_vars[channel_num].get()
+        
+        # Get color options and find the corresponding hex value
+        color_names = self.controller.get_color_names()
+        color_options = self.controller.get_color_options()
+        
+        if color_name in color_names:
+            color_index = color_names.index(color_name)
+            color_hex = color_options[color_index]
+            self.controller.update_channel_color(channel_num, color_hex)
     
     def _create_processing_tab(self, notebook):
         """Create improved processing tab."""
@@ -317,7 +421,7 @@ class ModernWDQAnalyzer:
         ttk.Button(offset_section, text="Remove from Selected", 
                   command=self._apply_offset_removal).pack(fill=tk.X, pady=2)
         
-        # Action buttons (remove replot button)
+        # Action buttons
         action_frame = ttk.LabelFrame(scrollable_frame, text="Actions", padding=10)
         action_frame.pack(fill=tk.X, padx=10, pady=10)
         
@@ -463,7 +567,7 @@ class ModernWDQAnalyzer:
         ttk.Label(plot_header, text="Data Visualization", 
                  style='Subheader.TLabel').pack(side=tk.LEFT)
         
-        # Plot controls on the right (remove refresh since it's automatic)
+        # Plot controls on the right
         controls_frame = ttk.Frame(plot_header)
         controls_frame.pack(side=tk.RIGHT)
         
@@ -499,23 +603,6 @@ class ModernWDQAnalyzer:
             success = self.controller.load_file(filename)
             if success:
                 self._update_status("File loaded successfully")
-    
-    def _set_axis_selection(self, axis_type: str):
-        """Set axis type for selected channels."""
-        selected_items = self.channel_tree.selection()
-        
-        if not selected_items:
-            messagebox.showwarning("Warning", "Please select channels first")
-            return
-        
-        for item in selected_items:
-            values = list(self.channel_tree.item(item)['values'])
-            channel_num = int(values[0])
-            values[3] = axis_type
-            self.channel_tree.item(item, values=values)
-            
-            # Update controller - this will automatically trigger plot update
-            self.controller.update_channel_axis(channel_num, axis_type)
     
     def _update_plot(self):
         """Update the plot with current data."""
@@ -650,27 +737,11 @@ class ModernWDQAnalyzer:
             self.status_label.config(text=message)
         self.root.update_idletasks()
     
-    def _populate_channel_table(self):
-        """Populate channel configuration table with processing info."""
-        # Clear existing items
-        for item in self.channel_tree.get_children():
-            self.channel_tree.delete(item)
-        
-        # Get channel data from controller
-        channel_data = self.controller.get_channel_data()
-        processing_info = self.controller.get_channel_processing_info()
-        
-        # Add channels with processing info
-        for channel_num, name, units, axis in channel_data:
-            processing = processing_info.get(channel_num, "None")
-            self.channel_tree.insert('', 'end', 
-                                   values=(channel_num, name, units, axis, processing))
-    
     # Controller Callback Handlers
     def _on_file_loaded(self, file_info: Dict):
         """Called when controller loads a file."""
         self._update_file_info_display()
-        self._populate_channel_table()
+        self._update_channel_config_dropdowns()  # Update dropdowns when file loads
         self._update_channel_checkboxes()  # Update checkboxes when file loads
         self._update_statistics()
     
@@ -681,7 +752,6 @@ class ModernWDQAnalyzer:
             self.process_info.config(text=message, style=style)
         
         self._update_statistics()  # Update stats after processing
-        self._populate_channel_table()  # Update processing info in table
         
         # Don't show success message box since plot updates automatically provide feedback
         if not success:
@@ -693,7 +763,6 @@ class ModernWDQAnalyzer:
             self.process_info.config(text=message, style='Success.TLabel')
         
         self._update_statistics()
-        self._populate_channel_table()  # Update processing info in table
         # Don't show message box since plot update provides visual feedback
     
     def _on_plot_update(self):

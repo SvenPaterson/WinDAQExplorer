@@ -1,4 +1,4 @@
-"""Plot management module for WDQ Analyzer."""
+"""Plot management module for WDQ Analyzer with dynamic subplot support."""
 
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 from models import ChannelConfig
 
@@ -20,10 +21,11 @@ plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'sans-serif']
 
 
 class PlotManager:
-    """Manages plot creation and updates."""
+    """Manages plot creation and updates with dynamic subplot support."""
     
-    # Color palette for secondary channels
-    COLORS = ['r', 'g', 'm', 'c', 'y', 'k', 'orange', 'purple', 'brown', 'pink']
+    # Color palette for channels
+    COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', 
+              '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
     
     def __init__(self, parent_frame: ttk.Frame):
         self.parent_frame = parent_frame
@@ -34,85 +36,147 @@ class PlotManager:
     
     def _setup_plot(self):
         """Initialize plot components."""
-        self.fig = plt.figure(figsize=(10, 8))
+        self.fig = plt.figure(figsize=(12, 8))
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.parent_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
     
     def update_plot(self, time_data: np.ndarray, channel_data: Dict[int, List[float]], 
                     channel_configs: Dict[int, ChannelConfig], filename: str):
-        """Update the plot with new data."""
+        """Update the plot with new data using dynamic subplots."""
         # Clear figure
         self.fig.clear()
         self.axes = []
         
-        # Separate channels by axis
-        primary_channels = [ch for ch, config in channel_configs.items() 
-                          if config.axis == "Primary"]
-        secondary_channels = [ch for ch, config in channel_configs.items() 
-                            if config.axis == "Secondary"]
+        # Group channels by subplot
+        subplot_groups = defaultdict(lambda: {'primary': [], 'secondary': [], 'hidden': []})
         
-        # Determine subplot configuration
-        num_plots = 0
-        if primary_channels:
-            num_plots += 1
-        if secondary_channels:
-            num_plots += 1
+        for channel, config in channel_configs.items():
+            if config.axis.lower() == 'omit' or config.axis.lower() == 'hide':
+                subplot_groups[config.subplot]['hidden'].append(channel)
+            elif config.axis.lower() == 'primary':
+                subplot_groups[config.subplot]['primary'].append(channel)
+            elif config.axis.lower() == 'secondary':
+                subplot_groups[config.subplot]['secondary'].append(channel)
         
-        if num_plots == 0:
+        # Remove empty subplots and renumber
+        active_subplots = {}
+        subplot_index = 1
+        for subplot_num in sorted(subplot_groups.keys()):
+            group = subplot_groups[subplot_num]
+            if group['primary'] or group['secondary']:  # Has visible channels
+                active_subplots[subplot_index] = group
+                subplot_index += 1
+        
+        if not active_subplots:
             # No channels to plot
             ax = self.fig.add_subplot(111)
-            ax.text(0.5, 0.5, 'No channels selected for plotting', 
-                   ha='center', va='center', transform=ax.transAxes)
+            ax.text(0.5, 0.5, 'No channels selected for plotting\n\nSelect channels and assign to Primary or Secondary axis', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=12)
             ax.set_xticks([])
             ax.set_yticks([])
             self.canvas.draw()
             return
         
+        num_subplots = len(active_subplots)
+        
         # Create subplots
-        plot_index = 1
-        
-        # Plot primary channels
-        if primary_channels:
-            ax1 = self.fig.add_subplot(num_plots, 1, plot_index)
-            self.axes.append(ax1)
-            self._plot_channels(ax1, time_data, channel_data, channel_configs, 
-                              primary_channels, f'Primary Channels - {filename}', 'Primary Channels')
-            plot_index += 1
-        
-        # Plot secondary channels
-        if secondary_channels:
-            ax2 = self.fig.add_subplot(num_plots, 1, plot_index)
-            self.axes.append(ax2)
-            self._plot_channels(ax2, time_data, channel_data, channel_configs, 
-                              secondary_channels, 'Secondary Channels', 'Secondary Channels',
-                              use_colors=True)
+        for i, (subplot_idx, group) in enumerate(active_subplots.items(), 1):
+            # Create primary axis
+            ax_primary = self.fig.add_subplot(num_subplots, 1, i)
+            self.axes.append(ax_primary)
+            
+            # Plot primary channels
+            if group['primary']:
+                self._plot_channels_on_axis(ax_primary, time_data, channel_data, channel_configs, 
+                                          group['primary'], 'Primary', 'left')
+            
+            # Create secondary axis if needed
+            ax_secondary = None
+            if group['secondary']:
+                ax_secondary = ax_primary.twinx()
+                self.axes.append(ax_secondary)
+                self._plot_channels_on_axis(ax_secondary, time_data, channel_data, channel_configs, 
+                                          group['secondary'], 'Secondary', 'right')
+            
+            # Set subplot title and formatting
+            if num_subplots == 1:
+                title = f'{filename}'
+            else:
+                title = f'{filename} - Subplot {subplot_idx}'
+            
+            ax_primary.set_title(title, fontsize=10, pad=10)
+            ax_primary.grid(True, alpha=0.3)
+            
+            # Only show x-label on bottom subplot
+            if i == num_subplots:
+                ax_primary.set_xlabel('Time (seconds)')
+            else:
+                ax_primary.set_xticklabels([])
         
         plt.tight_layout()
         self.canvas.draw()
     
-    def _plot_channels(self, ax, time_data: np.ndarray, channel_data: Dict[int, List[float]], 
-                      channel_configs: Dict[int, ChannelConfig], channels: List[int], 
-                      title: str, ylabel: str, use_colors: bool = False):
-        """Plot channels on given axis."""
+    def _plot_channels_on_axis(self, ax, time_data: np.ndarray, channel_data: Dict[int, List[float]], 
+                              channel_configs: Dict[int, ChannelConfig], channels: List[int], 
+                              axis_type: str, legend_side: str):
+        """Plot channels on a specific axis."""
+        if not channels:
+            return
+        
+        # Determine units for y-label
+        units = set()
+        for channel in channels:
+            config = channel_configs[channel]
+            if config.units != "N/A":
+                units.add(config.units)
+        
+        # Create y-label
+        if len(units) == 1:
+            ylabel = f"{axis_type} ({list(units)[0]})"
+        elif len(units) > 1:
+            ylabel = f"{axis_type} (Mixed Units)"
+        else:
+            ylabel = axis_type
+        
+        ax.set_ylabel(ylabel)
+        
+        # Plot channels
         for i, channel in enumerate(channels):
             config = channel_configs[channel]
             
-            # Set color and line style
-            if use_colors:
+            # Use assigned color or auto-assign
+            if config.color == "auto" or config.color == "#auto":
                 color = self.COLORS[i % len(self.COLORS)]
-                linewidth = 1
             else:
-                color = None  # Let matplotlib choose
+                color = config.color
+            
+            # Use different line styles for secondary axis to distinguish from primary
+            if axis_type == 'Secondary' and len(channels) > 1:
+                linestyles = ['-', '--', '-.', ':']
+                linestyle = linestyles[i % len(linestyles)]
                 linewidth = 1.5
+            else:
+                linestyle = '-'
+                linewidth = 2.0 if axis_type == 'Primary' else 1.5
             
             ax.plot(time_data, channel_data[channel], 
-                   label=config.label, linewidth=linewidth, color=color)
+                   label=config.label, color=color, linewidth=linewidth, 
+                   linestyle=linestyle, alpha=0.8)
         
-        ax.set_xlabel('Time (seconds)')
-        ax.set_ylabel(ylabel)
-        ax.legend(loc='best', framealpha=0.9)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(title)
+        # Add legend
+        if channels:
+            # Position legend based on which side
+            if legend_side == 'left':
+                legend_loc = 'upper left'
+            else:
+                legend_loc = 'upper right'
+            
+            legend = ax.legend(loc=legend_loc, framealpha=0.9, fontsize=9)
+            
+            # Color the legend text to match the axis
+            if axis_type == 'Secondary':
+                for text in legend.get_texts():
+                    text.set_color('darkred')
     
     def save_plot(self, default_filename: str = "plot.png") -> Optional[str]:
         """Save the current plot to file."""
